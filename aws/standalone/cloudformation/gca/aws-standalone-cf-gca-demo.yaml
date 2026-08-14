@@ -1,0 +1,39 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Deploy CNAPPOrgSecurityAuditor role in a single AWS account
+
+Parameters:
+  ExternalId:
+    Type: String
+    Description: External ID for role assumption security
+    NoEcho: true
+    MinLength: 2
+    MaxLength: 1224
+
+Resources:
+  CNAPPOrgSecurityAuditor:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: /
+      RoleName: CNAPPOrgSecurityAuditor
+      Description: CNAPPOrgSecurityAuditor
+      MaxSessionDuration: 43200
+
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: arn:aws:iam::735362266271:user/cnapp-security-audit-ak
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                sts:ExternalId: !Ref ExternalId
+
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/ReadOnlyAccess
+        - arn:aws:iam::aws:policy/SecurityAudit
+
+Outputs:
+  RoleArn:
+    Description: ARN of the created role
+    Value: !GetAtt CNAPPOrgSecurityAuditor.Arn

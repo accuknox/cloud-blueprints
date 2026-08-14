@@ -1,0 +1,148 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Deploys CNAPPOrgSecurityAuditorRole in management account AND all member accounts / selected OUs
+
+Parameters:
+  OrganizationalUnitIds:
+    Type: CommaDelimitedList
+    Description: "List of Organizational Unit IDs."
+
+  Regions:
+    Type: String
+    Description: "Comma-separated list of AWS regions where the StackSet should be deployed."
+    Default: "us-east-1,us-west-1,us-west-2,us-east-2,ca-central-1,eu-west-1,eu-central-1,eu-west-2,eu-west-3,eu-north-1,ap-south-1,ap-northeast-1,ap-northeast-2,ap-southeast-1,ap-southeast-2,sa-east-1,af-south-1,me-south-1,eu-south-1,ap-east-1"
+
+  AutoDeploy:
+    Type: String
+    Description: Automatically deploy stack set to new accounts
+    Default: "true"
+
+  ExternalId:
+    Type: String
+    Description: "External ID for role assumption security"
+    NoEcho: true
+    MinLength: 2
+    MaxLength: 1224
+
+  AccountFilterType:
+    Type: String
+    Default: "NONE"
+    AllowedValues:
+      - NONE
+      - INCLUDE
+      - EXCLUDE
+    Description: "Use INCLUDE to target only the provided AccountIds within the selected OUs; EXCLUDE to remove those AccountIds from the selected OUs; NONE to ignore AccountIds."
+
+  AccountIds:
+    Type: CommaDelimitedList
+    Default: ""
+    Description: "Comma-delimited AWS account IDs used with AccountFilterType."
+
+Conditions:
+  HasAccountIds: !Not [!Equals [!Join [",", !Ref AccountIds], ""]]
+  UseInclude: !Equals [!Ref AccountFilterType, "INCLUDE"]
+  UseExclude: !Equals [!Ref AccountFilterType, "EXCLUDE"]
+  AutoDeployEnabled: !Equals [!Ref AutoDeploy, "true"]
+
+Resources:
+  ManagementAccountRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: "/"
+      RoleName: "CNAPPOrgSecurityAuditor"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: arn:aws:iam::413297632188:user/cnapp-security-audit-ak
+            Action: "sts:AssumeRole"
+            Condition:
+              StringEquals:
+                "sts:ExternalId": !Ref ExternalId
+      Description: "CNAPPOrgSecurityAuditor (Management Account)"
+      MaxSessionDuration: 43200
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/ReadOnlyAccess"
+        - "arn:aws:iam::aws:policy/SecurityAudit"
+
+  StackSet:
+    Type: AWS::CloudFormation::StackSet
+    Properties:
+      AutoDeployment:
+        Enabled: !Ref AutoDeploy
+        # Only include RetainStacksOnAccountRemoval when AutoDeploy is true
+        RetainStacksOnAccountRemoval:
+          !If [AutoDeployEnabled, false, !Ref "AWS::NoValue"]
+      PermissionModel: SERVICE_MANAGED
+      Capabilities:
+        - CAPABILITY_NAMED_IAM
+      Description: Deploys CNAPPOrgSecurityAuditorRole across member accounts
+      Parameters:
+        - ParameterKey: ExternalId
+          ParameterValue: !Ref ExternalId
+      OperationPreferences:
+        FailureTolerancePercentage: 99
+        MaxConcurrentPercentage: 100
+        RegionConcurrencyType: PARALLEL
+      StackInstancesGroup:
+        - DeploymentTargets:
+            AccountFilterType: !If [HasAccountIds, !If [UseExclude, DIFFERENCE, !If [UseInclude, INTERSECTION, NONE]], NONE]
+            OrganizationalUnitIds: !Ref OrganizationalUnitIds
+            Accounts: !If [HasAccountIds, !Ref AccountIds, !Ref "AWS::NoValue"]
+          Regions:
+            - !Select
+              - 0
+              - !Split
+                - ","
+                - !Ref Regions
+      StackSetName: "AK-SecurityAuditorRoleStackSet"
+      TemplateBody: !Sub |
+        {
+          "AWSTemplateFormatVersion": "2010-09-09",
+          "Parameters": {
+            "ExternalId": {
+              "Type": "String",
+              "Description": "External ID for role assumption security",
+              "NoEcho": true,
+              "MinLength": 2,
+              "MaxLength": 1224
+            }
+          },
+          "Resources": {
+            "CNAPPOrgSecurityAuditor": {
+              "Type": "AWS::IAM::Role",
+              "Properties": {
+                "Path": "/",
+                "RoleName": "CNAPPOrgSecurityAuditor",
+                "AssumeRolePolicyDocument": {
+                  "Version": "2012-10-17",
+                  "Statement": [
+                    {
+                      "Effect": "Allow",
+                      "Principal": {
+                        "AWS": "arn:aws:iam::413297632188:user/cnapp-security-audit-ak"
+                      },
+                      "Action": "sts:AssumeRole",
+                      "Condition": {
+                        "StringEquals": {
+                          "sts:ExternalId": {"Ref": "ExternalId"}
+                        }
+                      }
+                    }
+                  ]
+                },
+                "Description": "CNAPPOrgSecurityAuditor",
+                "MaxSessionDuration": 43200,
+                "ManagedPolicyArns": [
+                  "arn:aws:iam::aws:policy/ReadOnlyAccess",
+                  "arn:aws:iam::aws:policy/SecurityAudit"
+                ]
+              }
+            }
+          }
+        }
+
+Outputs:
+  ManagementAccountRoleArn:
+    Description: "The ARN of the CNAPPOrgSecurityAuditor role in the management account"
+    Value: !GetAtt ManagementAccountRole.Arn

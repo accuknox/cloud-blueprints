@@ -1,0 +1,80 @@
+# ==============================================================================
+# Oracle Cloud Infrastructure (OCI) Organization Onboarding Configuration
+# ==============================================================================
+
+# Customer Tenancy Configuration
+tenancy_ocid = "ocid1.tenancy.oc1..aaaaaaaXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+
+# Policy Configuration
+policy_compartment_ocid = "" # Empty = tenancy root (REQUIRED for cross-tenancy)
+policy_name             = "AccuKnox-CNAPP-Scanner-Policy"
+policy_description      = "Policy granting AccuKnox CNAPP scanner read access to compartments"
+
+# Principal (Scanner Group) Configuration
+principal_type = "group"
+principal_name = "AccuKnox-Scanners"
+
+# ==============================================================================
+# Onboarding Mode: "all", "include", or "exclude"
+# ==============================================================================
+mode = "all"
+
+# ==============================================================================
+# Policy Permissions
+# ==============================================================================
+policy_permissions = [
+  {
+    action       = "read"
+    resource     = "all-resources"
+    where_clause = ""
+  },
+  {
+    action       = "inspect"
+    resource     = "all-resources"
+    where_clause = ""
+  }
+]
+
+# ==============================================================================
+# ALL Mode Configuration (use when mode = "all")
+# ==============================================================================
+# Grants access to entire tenancy with optional exclusions
+# all_excluded_compartment_ocids = ["ocid1.compartment.oc1..aaaaXXX"]
+
+# ==============================================================================
+# INCLUDE Mode Configuration (use when mode = "include")
+# ==============================================================================
+# Start with nothing, explicitly add compartments and their subtrees
+
+# included_compartment_ocids = ["ocid1.compartment.oc1..aaaaXXX"]
+# included_leaf_compartment_ocids = ["ocid1.compartment.oc1..bbbXXX"]
+# include_excluded_compartment_ocids = ["ocid1.compartment.oc1..cccXXX"]
+
+# ==============================================================================
+# EXCLUDE Mode Configuration (use when mode = "exclude")
+# ==============================================================================
+# Start with everything, explicitly remove compartments and their subtrees
+
+# excluded_compartment_ocids = ["ocid1.compartment.oc1..aaaaXXX"]
+# exclude_additional_compartment_ocids = ["ocid1.compartment.oc1..bbbXXX"]
+# exception_compartment_ocids = ["ocid1.compartment.oc1..cccXXX"]
+
+# ==============================================================================
+# Extra Compartments (applies to all modes)
+# ==============================================================================
+# extra_compartment_ocids = ["ocid1.compartment.oc1..aaaaXXX"]
+
+# ==============================================================================
+# Cross-Tenancy Access Configuration (Optional)
+# ==============================================================================
+# Required for AccuKnox scanner to access customer tenancy from external tenancy
+
+# cross_tenancy_enabled   = true
+# principal_tenancy_ocid  = "ocid1.tenancy.oc1..aaaaXXX"
+# principal_tenancy_alias = "accuknox_vendor"
+# principal_group_ocid    = "ocid1.group.oc1..aaaaXXX"
+
+# ==============================================================================
+# Debug Configuration
+# ==============================================================================
+mode_debug = false

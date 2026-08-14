@@ -1,0 +1,68 @@
+# ==============================================================================
+# GCP Organization Onboarding Configuration
+# ==============================================================================
+
+# Onboarding Mode: 'all', 'include', or 'exclude'
+mode = "all"
+
+# Auditor service account email
+auditor_service_account_email = "auditor@your-project.iam.gserviceaccount.com"
+
+# Customer's project for billing/quota when managing org resources
+provider_project_id = "your-billing-project"
+billing_project_id  = "your-billing-project"
+quota_project_id    = "your-billing-project"
+
+# Customer organization ID
+organization_id = "123456789012"
+
+# ==============================================================================
+# ALL Mode Configuration (use when mode = "all")
+# ==============================================================================
+# In ALL mode, all projects in the organization are onboarded by default.
+# Use all_excluded_project_ids to skip specific projects.
+
+all_excluded_project_ids = []
+
+# ==============================================================================
+# INCLUDE Mode Configuration (use when mode = "include")
+# ==============================================================================
+# In INCLUDE mode, only specified folders and projects are onboarded.
+
+# Folders to include (includes all nested projects)
+# included_folder_ids = ["folders/123456789", "folders/987654321"]
+
+# Cherry-pick individual projects from outside included folders
+# included_project_ids = ["project-1", "project-2"]
+
+# Exclude specific projects from included folders
+# include_excluded_project_ids = ["excluded-project"]
+
+# ==============================================================================
+# EXCLUDE Mode Configuration (use when mode = "exclude")
+# ==============================================================================
+# In EXCLUDE mode, all projects are onboarded except those in excluded folders.
+
+# Folders to exclude (excludes all nested projects)
+# excluded_folder_ids = ["folders/123456789"]
+
+# Additional projects to exclude
+# exclude_excluded_project_ids = ["project-to-exclude"]
+
+# Force-include projects from excluded folders
+# exception_project_ids = ["exception-project"]
+
+# ==============================================================================
+# Optional: Additional IAM Configuration
+# ==============================================================================
+
+# Additional organization-level roles beyond defaults
+# additional_organization_roles = ["roles/custom.viewer"]
+
+# Folder-level bindings (optional)
+# folder_bindings = [
+#   {
+#     folder_id = "123456789"
+#     roles     = ["roles/viewer"]
+#   }
+# ]
