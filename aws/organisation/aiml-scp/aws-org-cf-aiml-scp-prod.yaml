@@ -112,9 +112,10 @@ Resources:
                 Effect: Allow
                 Action:
                   - "bedrock:InvokeModel"
+                  - "bedrock:InvokeAgent"
                   - "bedrock:ListImportedModels"
-                  - "bedrock:ListModelInvocationJobs"
                   - "sagemaker:InvokeEndpoint"
+                  - "sagemaker:ListTags"
                   - "aws-marketplace:Subscribe"
                   - "aws-marketplace:ViewSubscriptions"
                   - "bedrock-agentcore:InvokeAgentRuntime"
@@ -214,9 +215,10 @@ Resources:
                           "Effect": "Allow",
                           "Action": [
                             "bedrock:InvokeModel",
+                            "bedrock:InvokeAgent",
                             "bedrock:ListImportedModels",
-                            "bedrock:ListModelInvocationJobs",
                             "sagemaker:InvokeEndpoint",
+                            "sagemaker:ListTags",
                             "aws-marketplace:Subscribe",
                             "aws-marketplace:ViewSubscriptions",
                             "bedrock-agentcore:InvokeAgentRuntime",
