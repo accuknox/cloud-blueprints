@@ -1,14 +1,22 @@
 terraform {
-  required_version = ">= 1.5.0"
+  required_version = ">= 1.7.0"
 
   required_providers {
     azurerm = {
       source  = "hashicorp/azurerm"
-      version = "~> 4.0"
+      version = ">= 4.26.0, < 5.0"
     }
     external = {
       source  = "hashicorp/external"
       version = "~> 2.3"
+    }
+    time = {
+      source  = "hashicorp/time"
+      version = "~> 0.9"
+    }
+    azuread = {
+      source  = "hashicorp/azuread"
+      version = ">= 2.47.0"
     }
   }
 }
@@ -19,6 +27,10 @@ provider "azurerm" {
   resource_provider_registrations = "none"
 }
 
+
+########################################################
+# Variables
+########################################################
 
 variable "managing_tenant_id" {
   description = "AccuKnox tenant ID"
@@ -74,7 +86,7 @@ variable "offer_description" {
 variable "context_subscription_id" {
   description = "Subscription ID (GUID) in which the shared Lighthouse definition is created. Any subscription of the tenant works; it is also used as the Terraform provider context."
   type        = string
-  default     = "7bf3366c-f7be-4e3e-aa98-b40f5977362d"
+  default     = ""
 
   validation {
     condition     = can(regex("(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", trimspace(var.context_subscription_id)))
@@ -208,6 +220,144 @@ variable "deployment_location" {
   description = "Azure region used for the subscription-level deployments the policy performs."
   type        = string
   default     = "eastus"
+}
+
+# --- AccuKnox application identity ---------------------------------------------------
+# Shared by the Microsoft Graph, AI/ML and Power Platform grants below
+variable "accuknox_app_client_id" {
+  description = "Client (application) ID of the AccuKnox enterprise app / service principal in the customer tenant, used for Graph permission grants and the Power Platform application user."
+  type        = string
+  default     = "384d0c6d-8e35-489a-8833-346c5bbf2dbc"
+
+  validation {
+    condition     = can(regex("(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", trimspace(var.accuknox_app_client_id)))
+    error_message = "accuknox_app_client_id must be a client ID (GUID)."
+  }
+}
+
+# --- Microsoft Graph permissions -----------------------------------------------------
+# Entra ID app role assignments (application permissions, admin-consented). Lighthouse
+# delegates Azure resources only, so directory-level reads have to be granted here.
+variable "enable_graph_permissions" {
+  description = "Grant the AccuKnox service principal Microsoft Graph application permissions. Requires Privileged Role Administrator or Global Administrator"
+  type        = bool
+  default     = true
+}
+
+variable "graph_app_role_ids" {
+  description = "Microsoft Graph app role (application permission) IDs granted and consented to the AccuKnox service principal."
+  type        = list(string)
+  default = [
+    "7ab1d382-f21e-4acd-a863-ba3e13f7da61", # Directory.Read.All
+    "9a5d68dd-52b0-4cc2-bd40-abcf44ac3a30", # Application.Read.All
+    "b0afded3-3588-46d8-8b3d-9842eff778da", # AuditLog.Read.All
+    "20e6f8e4-ffac-4cf7-82f7-70ddb7564318", # AuditLogsQuery-CRM.Read.All
+    "5e1e9171-754d-478c-812c-f1755a9a4c2d", # AuditLogsQuery.Read.All
+  ]
+
+  validation {
+    condition     = alltrue([for r in var.graph_app_role_ids : can(regex("(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", trimspace(r)))])
+    error_message = "graph_app_role_ids entries must be app role IDs (GUIDs)."
+  }
+}
+
+# --- AI/ML scanning ------------------------------------------------------------------
+# Direct AI/ML RBAC grants for the AccuKnox service principal.
+variable "enable_aiml_access" {
+  description = "Grant the AccuKnox service principal the AI/ML scanning roles (Cognitive Services User, Cognitive Services OpenAI User, Storage Blob Data Reader) directly on every onboarded subscription. Set to false to onboard General cloud only."
+  type        = bool
+  default     = true
+}
+
+variable "aiml_role_definition_ids" {
+  description = "Built-in role definition GUIDs granted to the AccuKnox service principal on every onboarded subscription for AI/ML scanning."
+  type        = list(string)
+  default = [
+    "a97b65f3-24c7-4388-baec-2e87135dc908", # Cognitive Services User
+    "5e0bd9bd-7b93-4f28-af87-19fc36ad61bd", # Cognitive Services OpenAI User
+    "2a2b9908-6ea1-4ae2-8e65-a410df84e7d1", # Storage Blob Data Reader
+  ]
+
+  validation {
+    condition     = alltrue([for r in var.aiml_role_definition_ids : can(regex("(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", trimspace(r)))])
+    error_message = "aiml_role_definition_ids entries must be role definition IDs (GUIDs)."
+  }
+}
+
+variable "enable_ml_scanner_custom_role" {
+  description = "Create the custom \"ML scanner\" role (listing actions that no built-in read-only role covers) and assign it to the AccuKnox service principal on every onboarded subscription. Requires rights to write role definitions. Ignored when enable_aiml_access = false."
+  type        = bool
+  default     = true
+}
+
+variable "ml_scanner_role_name" {
+  description = "Name of the custom ML scanner role. Must be unique within the customer tenant."
+  type        = string
+  default     = "AccuKnox ML Scanner"
+}
+
+variable "role_definition_propagation_delay" {
+  description = "How long to wait after creating the custom ML scanner role before assigning it, so Azure RBAC can replicate the definition. Increase it if the apply still fails with \"RoleAssignmentScopeNotAssignableToRoleDefinition\"."
+  type        = string
+  default     = "120s"
+
+  validation {
+    condition     = can(regex("^[0-9]+(s|m|h)$", var.role_definition_propagation_delay))
+    error_message = "role_definition_propagation_delay must be a duration such as \"90s\", \"3m\" or \"1h\"."
+  }
+}
+
+variable "ml_scanner_custom_role_actions" {
+  description = "Control-plane actions for the custom ML scanner role. These are management-plane '*/action' and '*/read' permissions, so they belong in 'actions' (not 'data_actions'). listStorageAccountKeys / datastores/listSecrets return the credentials the scanner uses to read training data by key/SAS."
+  type        = list(string)
+  default = [
+    "Microsoft.MachineLearningServices/workspaces/onlineEndpoints/score/action",
+    "Microsoft.MachineLearningServices/workspaces/serverlessEndpoints/listKeys/action",
+    "Microsoft.MachineLearningServices/workspaces/listStorageAccountKeys/action",
+    "Microsoft.MachineLearningServices/workspaces/datastores/listSecrets/action",
+    "Microsoft.CognitiveServices/accounts/listKeys/action",
+    "Microsoft.CognitiveServices/accounts/deployments/read",
+    "Microsoft.Storage/storageAccounts/listKeys/action",
+  ]
+}
+
+# --- Power Platform (Dataverse) ------------------------------------------------------
+# Power Platform sits outside the Azure Resource Manager hierarchy, so neither Lighthouse
+# nor an Azure role assignment reaches it. Registration is performed through the BAP and
+# Dataverse REST APIs using the operator's existing Azure CLI authentication.
+variable "enable_powerplatform_registration" {
+  description = "Register the AccuKnox application as an application user in selected Dataverse environments through the BAP/Dataverse REST APIs. Requires Power Platform/Dataverse administrator permissions. Set to false to skip."
+  type        = bool
+  default     = true
+}
+
+variable "powerplatform_environment_selection" {
+  description = "'all' = every Dataverse environment the operator can access from the BAP API; 'specific' = only environments listed in only_environment_display_names."
+  type        = string
+  default     = "all"
+
+  validation {
+    condition     = contains(["all", "specific"], var.powerplatform_environment_selection)
+    error_message = "powerplatform_environment_selection must be 'all' or 'specific'."
+  }
+}
+
+variable "only_environment_display_names" {
+  description = "Environment display names to onboard when powerplatform_environment_selection = 'specific'. Ignored when selection = 'all'."
+  type        = list(string)
+  default     = []
+}
+
+variable "dataverse_security_role_name" {
+  description = "Dataverse security role assigned to the AccuKnox application user."
+  type        = string
+  default     = "Service Reader"
+}
+
+variable "powerplatform_api_version" {
+  description = "BAP API version used for environment discovery."
+  type        = string
+  default     = "2021-04-01"
 }
 
 
@@ -446,6 +596,402 @@ resource "azurerm_lighthouse_assignment" "this" {
 }
 
 
+########################################################
+# AccuKnox service principal
+########################################################
+
+locals {
+  accuknox_principal_required = var.enable_graph_permissions || var.enable_aiml_access
+}
+
+data "azuread_service_principal" "accuknox" {
+  count     = local.accuknox_principal_required ? 1 : 0
+  client_id = trimspace(var.accuknox_app_client_id)
+}
+
+
+########################################################
+# Microsoft Graph application permissions
+########################################################
+
+data "azuread_service_principal" "msgraph" {
+  count     = var.enable_graph_permissions ? 1 : 0
+  client_id = "00000003-0000-0000-c000-000000000000" # Microsoft Graph
+}
+
+resource "azuread_app_role_assignment" "accuknox_graph" {
+  for_each = var.enable_graph_permissions ? toset([for r in var.graph_app_role_ids : lower(trimspace(r))]) : toset([])
+
+  app_role_id         = each.value
+  principal_object_id = data.azuread_service_principal.accuknox[0].object_id
+  resource_object_id  = data.azuread_service_principal.msgraph[0].object_id
+}
+
+
+########################################################
+# AI/ML scanning access
+########################################################
+
+locals {
+  aiml_enabled            = var.enable_aiml_access
+  ml_scanner_role_enabled = var.enable_aiml_access && var.enable_ml_scanner_custom_role
+
+  aiml_role_definition_ids = toset([for r in var.aiml_role_definition_ids : lower(trimspace(r))])
+
+  aiml_role_assignments = local.aiml_enabled ? {
+    for pair in setproduct(local.target_subscription_ids, local.aiml_role_definition_ids) :
+    "${pair[0]}/${pair[1]}" => {
+      subscription_id    = pair[0]
+      role_definition_id = pair[1]
+    }
+  } : {}
+
+  # Preferred scope for a newly-created ML Scanner role.
+  ml_scanner_desired_role_scope = local.uses_root_management_group ? "/providers/Microsoft.Management/managementGroups/${local.root_management_group_id}" : "/subscriptions/${local.context_subscription_id}"
+}
+
+# Discover an existing custom role with the same tenant-wide name.
+data "external" "ml_scanner_existing_role" {
+  count = local.ml_scanner_role_enabled ? 1 : 0
+
+  program = ["bash", "-c", <<-EOT
+    set -uo pipefail
+    role_name=${jsonencode(var.ml_scanner_role_name)}
+    role_id=$(az role definition list \
+      --name "$role_name" \
+      --custom-role-only true \
+      --query "[0].id" -o tsv 2>/dev/null || true)
+    printf '{"id":"%s"}\n' "$role_id"
+  EOT
+  ]
+}
+
+locals {
+  ml_scanner_existing_role_resource_id = local.ml_scanner_role_enabled ? trimspace(try(data.external.ml_scanner_existing_role[0].result.id, "")) : ""
+
+  ml_scanner_existing_role_guid = local.ml_scanner_existing_role_resource_id == "" ? "" : lower(element(reverse(split("/", local.ml_scanner_existing_role_resource_id)), 0))
+
+  ml_scanner_existing_role_scope = local.ml_scanner_existing_role_resource_id == "" ? "" : trimsuffix(
+    local.ml_scanner_existing_role_resource_id,
+    "/providers/Microsoft.Authorization/roleDefinitions/${local.ml_scanner_existing_role_guid}",
+  )
+
+  # Keep the original Azure scope when adopting an existing role; otherwise use the desired scope.
+  ml_scanner_role_scope = local.ml_scanner_existing_role_scope != "" ? local.ml_scanner_existing_role_scope : local.ml_scanner_desired_role_scope
+
+  # A management-group scope covers its child subscriptions. A subscription-scoped existing
+  # role needs the target subscriptions listed explicitly.
+  ml_scanner_assignable_scopes = startswith(lower(local.ml_scanner_role_scope), "/providers/microsoft.management/managementgroups/") ? [
+    local.ml_scanner_role_scope
+  ] : distinct(concat(
+    [local.ml_scanner_role_scope],
+    [for s in sort(tolist(local.target_subscription_ids)) : "/subscriptions/${s}"],
+  ))
+
+  ml_scanner_role_imports = local.ml_scanner_existing_role_resource_id != "" ? {
+    existing = "${local.ml_scanner_existing_role_resource_id}|${local.ml_scanner_existing_role_scope}"
+  } : {}
+}
+
+# Discover existing direct AI/ML assignments so a rerun can adopt them into state.
+data "azurerm_role_assignments" "accuknox_aiml_existing" {
+  for_each = local.aiml_enabled ? local.target_subscription_ids : toset([])
+
+  scope          = "/subscriptions/${each.value}"
+  principal_id   = data.azuread_service_principal.accuknox[0].object_id
+  limit_at_scope = true
+}
+
+locals {
+  aiml_existing_imports = {
+    for item in flatten([
+      for subscription_id, result in data.azurerm_role_assignments.accuknox_aiml_existing : [
+        for assignment in result.role_assignments : {
+          key = "${subscription_id}/${lower(element(reverse(split("/", assignment.role_definition_id)), 0))}"
+          id  = assignment.role_assignment_id
+        }
+        if contains(
+          local.aiml_role_definition_ids,
+          lower(element(reverse(split("/", assignment.role_definition_id)), 0))
+        )
+      ]
+    ]) : item.key => item.id
+  }
+}
+
+# Existing matching assignments are imported automatically; missing ones are created.
+import {
+  for_each = local.aiml_existing_imports
+  to       = azurerm_role_assignment.accuknox_aiml[each.key]
+  id       = each.value
+}
+
+resource "azurerm_role_assignment" "accuknox_aiml" {
+  for_each = local.aiml_role_assignments
+
+  scope              = "/subscriptions/${each.value.subscription_id}"
+  role_definition_id = "/subscriptions/${each.value.subscription_id}/providers/Microsoft.Authorization/roleDefinitions/${each.value.role_definition_id}"
+  principal_id       = data.azuread_service_principal.accuknox[0].object_id
+  principal_type     = "ServicePrincipal"
+}
+
+# Adopt the existing tenant-wide custom role when present; otherwise create it.
+import {
+  for_each = local.ml_scanner_role_imports
+  to       = azurerm_role_definition.accuknox_ml_scanner[0]
+  id       = each.value
+}
+
+resource "azurerm_role_definition" "accuknox_ml_scanner" {
+  count = local.ml_scanner_role_enabled ? 1 : 0
+
+  name        = var.ml_scanner_role_name
+  scope       = local.ml_scanner_role_scope
+  description = "AccuKnox CSPM: retrieve ML datastore/storage secrets and endpoint keys for dataset scanning"
+
+  permissions {
+    actions     = var.ml_scanner_custom_role_actions
+    not_actions = []
+  }
+
+  assignable_scopes = local.ml_scanner_assignable_scopes
+}
+
+# Allow Azure RBAC time to propagate the custom role before assignments.
+resource "time_sleep" "ml_scanner_role_propagation" {
+  count = local.ml_scanner_role_enabled ? 1 : 0
+
+  create_duration = var.role_definition_propagation_delay
+
+  triggers = {
+    role_definition_id = azurerm_role_definition.accuknox_ml_scanner[0].role_definition_resource_id
+    assignable_scopes  = join(",", local.ml_scanner_assignable_scopes)
+  }
+}
+
+locals {
+  ml_scanner_assignment_existing_imports = local.ml_scanner_existing_role_guid != "" ? {
+    for item in flatten([
+      for subscription_id, result in data.azurerm_role_assignments.accuknox_aiml_existing : [
+        for assignment in result.role_assignments : {
+          key = subscription_id
+          id  = assignment.role_assignment_id
+        }
+        if lower(element(reverse(split("/", assignment.role_definition_id)), 0)) == local.ml_scanner_existing_role_guid
+      ]
+    ]) : item.key => item.id
+  } : {}
+}
+
+# Adopt existing ML Scanner assignments as well, preventing rerun 409 conflicts.
+import {
+  for_each = local.ml_scanner_assignment_existing_imports
+  to       = azurerm_role_assignment.accuknox_ml_scanner[each.key]
+  id       = each.value
+}
+
+resource "azurerm_role_assignment" "accuknox_ml_scanner" {
+  for_each = local.ml_scanner_role_enabled ? local.target_subscription_ids : toset([])
+
+  scope = "/subscriptions/${each.value}"
+  role_definition_id = "/subscriptions/${each.value}/providers/Microsoft.Authorization/roleDefinitions/${azurerm_role_definition.accuknox_ml_scanner[0].role_definition_id}"
+  principal_id       = data.azuread_service_principal.accuknox[0].object_id
+  principal_type     = "ServicePrincipal"
+
+  depends_on = [time_sleep.ml_scanner_role_propagation]
+}
+
+
+########################################################
+# Power Platform (Dataverse) registration via REST API
+# Uses BAP for discovery and Dataverse REST APIs for app-user registration.
+########################################################
+
+data "external" "powerplatform_environments" {
+  count = var.enable_powerplatform_registration ? 1 : 0
+
+  program = ["bash", "-c", <<-EOT
+    az rest --method get \
+      --url "https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/environments?api-version=${var.powerplatform_api_version}&%24expand=properties.linkedEnvironmentMetadata" \
+      --resource "https://api.bap.microsoft.com/" --only-show-errors \
+      --query "{ envs: to_string(value[?properties.linkedEnvironmentMetadata.instanceUrl].{ id: name, name: properties.displayName, url: properties.linkedEnvironmentMetadata.instanceUrl }) }" \
+      -o json
+  EOT
+  ]
+}
+
+locals {
+  pp_all_envs = var.enable_powerplatform_registration ? jsondecode(
+    data.external.powerplatform_environments[0].result.envs
+  ) : []
+
+  # Apply the all/specific environment selection and normalize the Dataverse URL.
+  dataverse_envs = {
+    for env in local.pp_all_envs :
+    env.id => {
+      id   = env.id
+      name = env.name
+      url  = trimsuffix(env.url, "/")
+    }
+    if var.powerplatform_environment_selection == "all" ||
+    contains(var.only_environment_display_names, env.name)
+  }
+}
+resource "terraform_data" "pp_app_user" {
+  for_each = local.dataverse_envs
+
+  input = {
+    url       = each.value.url
+    env_id    = each.value.id
+    env_name  = each.value.name
+    app_id    = trimspace(var.accuknox_app_client_id)
+    role_name = var.dataverse_security_role_name
+  }
+
+  triggers_replace = {
+    url       = each.value.url
+    app_id    = trimspace(var.accuknox_app_client_id)
+    role_name = var.dataverse_security_role_name
+  }
+
+  provisioner "local-exec" {
+    when        = create
+    interpreter = ["/bin/bash", "-c"]
+    quiet       = true
+
+    command = <<-EOT
+      set -uo pipefail
+
+      base="${self.input.url}/api/data/v9.2"
+      res="${self.input.url}"
+      app="${self.input.app_id}"
+      role="${self.input.role_name}"
+      env="${self.input.env_name}"
+
+      bu=$(az rest --method get \
+        --url "$base/businessunits?%24select=businessunitid&%24filter=parentbusinessunitid%20eq%20null" \
+        --resource "$res" \
+        --only-show-errors \
+        --query "value[0].businessunitid" \
+        -o tsv 2>/dev/null)
+
+      if [ -z "$bu" ]; then
+        echo "SKIP Power Platform: $env"
+        exit 0
+      fi
+
+      roleid=$(az rest --method get \
+        --url "$base/roles?%24select=roleid&%24filter=name%20eq%20'$role'%20and%20_businessunitid_value%20eq%20$bu" \
+        --resource "$res" \
+        --only-show-errors \
+        --query "value[0].roleid" \
+        -o tsv 2>/dev/null)
+
+      if [ -z "$roleid" ]; then
+        echo "ERROR Power Platform: $env - role '$role' not found" >&2
+        exit 1
+      fi
+
+      uid=$(az rest --method get \
+        --url "$base/systemusers?%24select=systemuserid&%24filter=applicationid%20eq%20$app" \
+        --resource "$res" \
+        --only-show-errors \
+        --query "value[0].systemuserid" \
+        -o tsv 2>/dev/null)
+
+      if [ -z "$uid" ]; then
+        uid=$(az rest --method post \
+          --url "$base/systemusers" \
+          --resource "$res" \
+          --headers "Content-Type=application/json" "Prefer=return=representation" \
+          --body "{\"applicationid\":\"$app\",\"businessunitid@odata.bind\":\"/businessunits($bu)\"}" \
+          --only-show-errors \
+          --query "systemuserid" \
+          -o tsv 2>/dev/null)
+
+        if [ -z "$uid" ]; then
+          echo "ERROR Power Platform: $env - app user creation failed" >&2
+          exit 1
+        fi
+      fi
+
+      az rest --method patch \
+        --url "$base/systemusers($uid)" \
+        --resource "$res" \
+        --headers "Content-Type=application/json" \
+        --body '{"isdisabled":false}' \
+        --only-show-errors \
+        -o none >/dev/null 2>&1 || true
+
+      err=$(mktemp)
+
+      if az rest --method post \
+        --url "$base/systemusers($uid)/systemuserroles_association/%24ref" \
+        --resource "$res" \
+        --headers "Content-Type=application/json" \
+        --body "{\"@odata.id\":\"$base/roles($roleid)\"}" \
+        --only-show-errors \
+        -o none >/dev/null 2>"$err"; then
+
+        echo "OK Power Platform: $env"
+
+      elif grep -qiE 'duplicate|already' "$err"; then
+
+        echo "OK Power Platform: $env"
+
+      else
+        echo "ERROR Power Platform: $env - role assignment failed" >&2
+        rm -f "$err"
+        exit 1
+      fi
+
+      rm -f "$err"
+    EOT
+  }
+
+  provisioner "local-exec" {
+    when        = destroy
+    interpreter = ["/bin/bash", "-c"]
+    quiet       = true
+
+    command = <<-EOT
+      set -uo pipefail
+
+      base="${self.input.url}/api/data/v9.2"
+      res="${self.input.url}"
+      app="${self.input.app_id}"
+      env="${self.input.env_name}"
+
+      uid=$(az rest --method get \
+        --url "$base/systemusers?%24select=systemuserid&%24filter=applicationid%20eq%20$app" \
+        --resource "$res" \
+        --only-show-errors \
+        --query "value[0].systemuserid" \
+        -o tsv 2>/dev/null)
+
+      if [ -z "$uid" ]; then
+        echo "SKIP Power Platform: $env"
+        exit 0
+      fi
+
+      if az rest --method patch \
+        --url "$base/systemusers($uid)" \
+        --resource "$res" \
+        --headers "Content-Type=application/json" \
+        --body '{"isdisabled":true}' \
+        --only-show-errors \
+        -o none >/dev/null 2>&1; then
+
+        echo "OK Power Platform disabled: $env"
+      else
+        echo "ERROR Power Platform: $env - disable failed" >&2
+        exit 1
+      fi
+    EOT
+  }
+}
+
+
 resource "azurerm_policy_definition" "auto_onboard" {
   for_each = local.policy_scope_management_group_ids
 
@@ -610,4 +1156,29 @@ output "effective_exclusions" {
 output "auto_onboarding_policy_assignment_ids" {
   description = "Policy assignment IDs keyed by management group (empty when enable_auto_policy = false)."
   value       = { for mg, pa in azurerm_management_group_policy_assignment.auto_onboard : mg => pa.id }
+}
+
+output "granted_graph_app_role_ids" {
+  description = "Microsoft Graph app role IDs granted to the AccuKnox service principal (empty when enable_graph_permissions = false)."
+  value       = sort([for a in azuread_app_role_assignment.accuknox_graph : a.app_role_id])
+}
+
+output "aiml_role_assignment_scopes" {
+  description = "Subscriptions that received the direct AI/ML role assignments (empty when enable_aiml_access = false)."
+  value       = local.aiml_enabled ? sort(tolist(local.target_subscription_ids)) : []
+}
+
+output "ml_scanner_role_definition_id" {
+  description = "Resource ID of the custom ML scanner role definition (null when enable_ml_scanner_custom_role = false)."
+  value       = one(azurerm_role_definition.accuknox_ml_scanner[*].role_definition_resource_id)
+}
+
+output "powerplatform_selected_environments" {
+  description = "Environments selected for AccuKnox app-user registration (display name => Dataverse URL)."
+  value       = { for id, env in local.dataverse_envs : env.name => env.url }
+}
+
+output "powerplatform_registration_resource_ids" {
+  description = "Terraform resource IDs for the selected Dataverse app-user registration operations. Runtime API success/failure details are emitted by the local-exec provisioners."
+  value       = { for id, registration in terraform_data.pp_app_user : id => registration.id }
 }
