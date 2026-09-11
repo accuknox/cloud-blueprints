@@ -299,7 +299,7 @@ variable "ml_scanner_role_name" {
 variable "role_definition_propagation_delay" {
   description = "How long to wait after creating the custom ML scanner role before assigning it, so Azure RBAC can replicate the definition. Increase it if the apply still fails with \"RoleAssignmentScopeNotAssignableToRoleDefinition\"."
   type        = string
-  default     = "120s"
+  default     = "20s"
 
   validation {
     condition     = can(regex("^[0-9]+(s|m|h)$", var.role_definition_propagation_delay))
@@ -352,6 +352,23 @@ variable "dataverse_security_role_name" {
   description = "Dataverse security role assigned to the AccuKnox application user."
   type        = string
   default     = "Service Reader"
+}
+
+variable "powerplatform_request_timeout_seconds" {
+  description = "Maximum seconds per Power Platform authentication or HTTP request (requires GNU timeout, curl, and jq)."
+  type        = number
+  default     = 30
+
+  validation {
+    condition     = var.powerplatform_request_timeout_seconds >= 5 && var.powerplatform_request_timeout_seconds <= 300 && floor(var.powerplatform_request_timeout_seconds) == var.powerplatform_request_timeout_seconds
+    error_message = "powerplatform_request_timeout_seconds must be an integer between 5 and 300."
+  }
+}
+
+variable "powerplatform_skip_environment_ids" {
+  description = "Environment IDs where registration is known to be unsupported. Creation is skipped, but existing users are still cleaned up on destroy."
+  type        = set(string)
+  default     = []
 }
 
 variable "powerplatform_api_version" {
@@ -683,9 +700,9 @@ locals {
   # role needs the target subscriptions listed explicitly.
   ml_scanner_assignable_scopes = startswith(lower(local.ml_scanner_role_scope), "/providers/microsoft.management/managementgroups/") ? [
     local.ml_scanner_role_scope
-  ] : distinct(concat(
-    [local.ml_scanner_role_scope],
-    [for s in sort(tolist(local.target_subscription_ids)) : "/subscriptions/${s}"],
+    ] : distinct(concat(
+      [local.ml_scanner_role_scope],
+      [for s in sort(tolist(local.target_subscription_ids)) : "/subscriptions/${s}"],
   ))
 
   ml_scanner_role_imports = local.ml_scanner_existing_role_resource_id != "" ? {
@@ -793,7 +810,7 @@ import {
 resource "azurerm_role_assignment" "accuknox_ml_scanner" {
   for_each = local.ml_scanner_role_enabled ? local.target_subscription_ids : toset([])
 
-  scope = "/subscriptions/${each.value}"
+  scope              = "/subscriptions/${each.value}"
   role_definition_id = "/subscriptions/${each.value}/providers/Microsoft.Authorization/roleDefinitions/${azurerm_role_definition.accuknox_ml_scanner[0].role_definition_id}"
   principal_id       = data.azuread_service_principal.accuknox[0].object_id
   principal_type     = "ServicePrincipal"
@@ -811,12 +828,33 @@ data "external" "powerplatform_environments" {
   count = var.enable_powerplatform_registration ? 1 : 0
 
   program = ["bash", "-c", <<-EOT
-    az rest --method get \
-      --url "https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/environments?api-version=${var.powerplatform_api_version}&%24expand=properties.linkedEnvironmentMetadata" \
-      --resource "https://api.bap.microsoft.com/" --only-show-errors \
-      --query "{ envs: to_string(value[?properties.linkedEnvironmentMetadata.instanceUrl].{ id: name, name: properties.displayName, url: properties.linkedEnvironmentMetadata.instanceUrl }) }" \
-      -o json
+    set -euo pipefail
+    command -v jq >/dev/null || { echo "jq is required for Power Platform discovery" >&2; exit 1; }
+    work=$(mktemp -d)
+    trap 'rm -rf "$work"' EXIT
+    touch "$work/environments" "$work/visited"
+    url="https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/environments?api-version=$1&%24expand=properties.linkedEnvironmentMetadata"
+    while [ -n "$url" ]; do
+      case "$url" in
+        https://api.bap.microsoft.com/*) ;;
+        *) echo "Unexpected BAP continuation URL" >&2; exit 1 ;;
+      esac
+      if grep -Fxq "$url" "$work/visited"; then
+        echo "Repeated BAP continuation URL" >&2
+        exit 1
+      fi
+      printf '%s\n' "$url" >> "$work/visited"
+      timeout --kill-after=5s "$2" az rest --method get --url "$url" \
+        --resource "https://api.bap.microsoft.com/" --only-show-errors -o json > "$work/page"
+      jq -e '.value | type == "array"' "$work/page" >/dev/null
+      jq -c '.value[] | select(.properties.linkedEnvironmentMetadata.instanceUrl != null and .properties.linkedEnvironmentMetadata.instanceUrl != "") |
+        {id: .name, name: .properties.displayName, url: .properties.linkedEnvironmentMetadata.instanceUrl, state: .properties.linkedEnvironmentMetadata.instanceState}' \
+        "$work/page" >> "$work/environments"
+      url=$(jq -r '.nextLink // ."@odata.nextLink" // empty' "$work/page")
+    done
+    jq -s '{envs: (unique_by(.id) | tojson)}' "$work/environments"
   EOT
+    , "powerplatform-discovery", var.powerplatform_api_version, tostring(var.powerplatform_request_timeout_seconds)
   ]
 }
 
@@ -825,13 +863,14 @@ locals {
     data.external.powerplatform_environments[0].result.envs
   ) : []
 
-  # Apply the all/specific environment selection and normalize the Dataverse URL.
+  # Keep resource membership stable when environment health changes.
   dataverse_envs = {
     for env in local.pp_all_envs :
     env.id => {
-      id   = env.id
-      name = env.name
-      url  = trimsuffix(env.url, "/")
+      id    = env.id
+      name  = env.name
+      url   = trimsuffix(env.url, "/")
+      state = coalesce(try(env.state, null), "Unknown")
     }
     if var.powerplatform_environment_selection == "all" ||
     contains(var.only_environment_display_names, env.name)
@@ -841,11 +880,14 @@ resource "terraform_data" "pp_app_user" {
   for_each = local.dataverse_envs
 
   input = {
-    url       = each.value.url
-    env_id    = each.value.id
-    env_name  = each.value.name
-    app_id    = trimspace(var.accuknox_app_client_id)
-    role_name = var.dataverse_security_role_name
+    url             = each.value.url
+    env_id          = each.value.id
+    env_name        = each.value.name
+    app_id          = trimspace(var.accuknox_app_client_id)
+    role_name       = var.dataverse_security_role_name
+    state           = each.value.state
+    skip            = contains(var.powerplatform_skip_environment_ids, each.key)
+    timeout_seconds = var.powerplatform_request_timeout_seconds
   }
 
   triggers_replace = {
@@ -859,93 +901,161 @@ resource "terraform_data" "pp_app_user" {
     interpreter = ["/bin/bash", "-c"]
     quiet       = true
 
+    environment = {
+      PP_URL     = self.input.url
+      PP_APP     = self.input.app_id
+      PP_ROLE    = self.input.role_name
+      PP_ENV     = self.input.env_name
+      PP_STATE   = self.input.state
+      PP_SKIP    = tostring(self.input.skip)
+      PP_TIMEOUT = tostring(self.input.timeout_seconds)
+    }
+
     command = <<-EOT
-      set -uo pipefail
+      set -euo pipefail
+      base="$PP_URL/api/data/v9.2"
+      umask 077
+      work=$(mktemp -d)
+      err="$work/error"
+      touch "$err"
+      trap 'rm -rf "$work"' EXIT
 
-      base="${self.input.url}/api/data/v9.2"
-      res="${self.input.url}"
-      app="${self.input.app_id}"
-      role="${self.input.role_name}"
-      env="${self.input.env_name}"
+      authenticate() {
+        command -v curl >/dev/null && command -v jq >/dev/null || fail "curl and jq are required"
+        local token
+        token=$(timeout --kill-after=5s "$PP_TIMEOUT" az account get-access-token \
+          --resource "$PP_URL" --query accessToken -o tsv --only-show-errors 2>"$err") || fail "token acquisition failed"
+        [ -n "$token" ] || fail "token acquisition returned an empty token"
+        printf 'Authorization: Bearer %s\n' "$token" > "$work/auth"
+      }
+      # rest METHOD URL [jq filter] [JSON body]
+      # Do not retry writes with unknown outcomes.
+      rest() {
+        local method="$1" url="$2" query="$${3:-empty}" body="$${4:-}" status rc
+        local args=()
+        [ -z "$body" ] || args+=(--data-binary "$body")
+        : > "$err"
+        status=$(curl --disable --silent --show-error --globoff --proto '=https' \
+          --connect-timeout "$PP_TIMEOUT" --max-time "$PP_TIMEOUT" \
+          --request "$method" --url "$url" \
+          --header "@$work/auth" --header 'Accept: application/json' \
+          --header 'Content-Type: application/json' --header 'OData-Version: 4.0' \
+          --header 'Prefer: return=representation' \
+          --output "$work/response" --write-out '%%{http_code}' "$${args[@]}" 2>"$err") || {
+            rc=$?
+            case "$rc" in
+              6|7|28) printf 'Unavailable transport (curl %s)\n' "$rc" >> "$err" ;;
+            esac
+            return "$rc"
+          }
+        case "$status" in
+          2??) ;;
+          *) printf 'HTTP %s\n' "$status" > "$err"
+             cat "$work/response" >> "$err"
+             return 1 ;;
+        esac
+        if [ "$method" = GET ]; then
+          jq -e '.value | type == "array"' "$work/response" >/dev/null 2>"$err" || {
+            echo 'Invalid Dataverse collection response' >> "$err"
+            return 1
+          }
+        fi
+        [ "$query" = empty ] || jq -r "$query" "$work/response" 2>"$err"
+      }
+      fail() {
+        echo "ERROR Power Platform: $PP_ENV - $1" >&2
+        cat "$err" >&2
+        exit 1
+      }
+      read_failed() {
+        if [ "$1" = 124 ] || [ "$1" = 137 ] || grep -qiE '^HTTP (403|404|502|503|504)$|^Unavailable transport' "$err"; then
+          echo "SKIP Power Platform: $PP_ENV - unavailable or access denied ($2); use -replace to retry" >&2
+          cat "$err" >&2
+          exit 0
+        fi
+        fail "$2"
+      }
 
-      bu=$(az rest --method get \
-        --url "$base/businessunits?%24select=businessunitid&%24filter=parentbusinessunitid%20eq%20null" \
-        --resource "$res" \
-        --only-show-errors \
-        --query "value[0].businessunitid" \
-        -o tsv 2>/dev/null)
-
-      if [ -z "$bu" ]; then
-        echo "SKIP Power Platform: $env"
+      if [ "$PP_SKIP" = true ]; then
+        echo "SKIP Power Platform: $PP_ENV - explicitly excluded from registration"
         exit 0
       fi
+      case "$PP_STATE" in
+        Ready|Unknown) ;;
+        *) echo "SKIP Power Platform: $PP_ENV - Dataverse state $PP_STATE; use -replace to retry"; exit 0 ;;
+      esac
 
-      roleid=$(az rest --method get \
-        --url "$base/roles?%24select=roleid&%24filter=name%20eq%20'$role'%20and%20_businessunitid_value%20eq%20$bu" \
-        --resource "$res" \
-        --only-show-errors \
-        --query "value[0].roleid" \
-        -o tsv 2>/dev/null)
+      authenticate
 
-      if [ -z "$roleid" ]; then
-        echo "ERROR Power Platform: $env - role '$role' not found" >&2
-        exit 1
+      role_literal=$(printf '%s' "$PP_ROLE" | sed "s/'/''/g")
+      role_encoded=""
+      export LC_ALL=C
+      for ((i=0; i<$${#role_literal}; i++)); do
+        c="$${role_literal:i:1}"
+        printf -v hex '%%%02X' "'$c"
+        role_encoded+="$hex"
+      done
+      # Soft-deleted users can block registration; check them first.
+      user=$(rest GET "$base/systemusers?%24select=systemuserid,_businessunitid_value,isdisabled,deletedstate&%24filter=applicationid%20eq%20$PP_APP&%24orderby=deletedstate%20desc&%24top=1" \
+        '.value[0] // empty | if .deletedstate == 1 then "SOFT_DELETED" elif .deletedstate == 0 then [.systemuserid, ._businessunitid_value, .isdisabled] | @tsv else error("Unknown user deleted state") end') || read_failed "$?" "app user lookup failed"
+      if [ "$user" = SOFT_DELETED ]; then
+        echo "SKIP Power Platform: $PP_ENV - soft-deleted application user requires administrator resolution; use -replace after resolution to retry" >&2
+        exit 0
       fi
-
-      uid=$(az rest --method get \
-        --url "$base/systemusers?%24select=systemuserid&%24filter=applicationid%20eq%20$app" \
-        --resource "$res" \
-        --only-show-errors \
-        --query "value[0].systemuserid" \
-        -o tsv 2>/dev/null)
+      uid=""; bu=""; disabled=""; roleid=""
+      if [ -n "$user" ]; then
+        IFS=$'\t' read -r uid bu disabled <<< "$user"
+        roleid=$(rest GET "$base/roles?%24select=roleid&%24filter=name%20eq%20'$role_encoded'%20and%20_businessunitid_value%20eq%20$bu" \
+          '.value[0].roleid // empty') || read_failed "$?" "role lookup failed"
+      else
+        unit=$(rest GET "$base/businessunits?%24select=businessunitid&%24filter=parentbusinessunitid%20eq%20null&%24expand=business_unit_roles(%24select=roleid;%24filter=name%20eq%20'$role_encoded')" \
+          '.value[0] // empty | [.businessunitid, (.business_unit_roles[0].roleid // "")] | @tsv') || read_failed "$?" "business unit and role lookup failed"
+        [ -n "$unit" ] || fail "root business unit not found"
+        IFS=$'\t' read -r bu roleid <<< "$unit"
+        [ -n "$bu" ] || fail "root business unit not found"
+      fi
+      [ -n "$roleid" ] || fail "role '$PP_ROLE' not found in business unit $bu"
 
       if [ -z "$uid" ]; then
-        uid=$(az rest --method post \
-          --url "$base/systemusers" \
-          --resource "$res" \
-          --headers "Content-Type=application/json" "Prefer=return=representation" \
-          --body "{\"applicationid\":\"$app\",\"businessunitid@odata.bind\":\"/businessunits($bu)\"}" \
-          --only-show-errors \
-          --query "systemuserid" \
-          -o tsv 2>/dev/null)
-
-        if [ -z "$uid" ]; then
-          echo "ERROR Power Platform: $env - app user creation failed" >&2
-          exit 1
+        if uid=$(rest POST "$base/systemusers?%24select=systemuserid" \
+          '.systemuserid // empty' \
+          "{\"applicationid\":\"$PP_APP\",\"businessunitid@odata.bind\":\"/businessunits($bu)\",\"systemuserroles_association@odata.bind\":[\"/roles($roleid)\"]}"); then
+          [ -n "$uid" ] || fail "app user creation returned no ID"
+          echo "OK Power Platform: $PP_ENV"
+          exit 0
+        elif grep -qiE '^HTTP 403$' "$err"; then
+          echo "SKIP Power Platform: $PP_ENV - app user registration denied; use -replace to retry" >&2
+          cat "$err" >&2
+          exit 0
+        else
+          fail "app user creation failed"
+        fi
+      elif [ "$disabled" = True ] || [ "$disabled" = true ]; then
+        if ! rest PATCH "$base/systemusers($uid)" \
+          empty '{"isdisabled":false}'; then
+          if grep -q '^HTTP 403$' "$err"; then
+            echo "SKIP Power Platform: $PP_ENV - activation denied; user remains disabled; use -replace to retry" >&2
+            cat "$err" >&2
+            exit 0
+          fi
+          if grep -q '^HTTP 400$' "$err" && jq -e '.error.code == "0x80048357"' "$work/response" >/dev/null 2>&1; then
+            echo "SKIP Power Platform: $PP_ENV - application user was soft-deleted; use -replace after administrator resolution to retry" >&2
+            cat "$err" >&2
+            exit 0
+          fi
+          fail "activation failed"
         fi
       fi
 
-      az rest --method patch \
-        --url "$base/systemusers($uid)" \
-        --resource "$res" \
-        --headers "Content-Type=application/json" \
-        --body '{"isdisabled":false}' \
-        --only-show-errors \
-        -o none >/dev/null 2>&1 || true
-
-      err=$(mktemp)
-
-      if az rest --method post \
-        --url "$base/systemusers($uid)/systemuserroles_association/%24ref" \
-        --resource "$res" \
-        --headers "Content-Type=application/json" \
-        --body "{\"@odata.id\":\"$base/roles($roleid)\"}" \
-        --only-show-errors \
-        -o none >/dev/null 2>"$err"; then
-
-        echo "OK Power Platform: $env"
-
-      elif grep -qiE 'duplicate|already' "$err"; then
-
-        echo "OK Power Platform: $env"
-
-      else
-        echo "ERROR Power Platform: $env - role assignment failed" >&2
-        rm -f "$err"
-        exit 1
+      if ! rest POST "$base/systemusers($uid)/systemuserroles_association/%24ref" \
+        empty \
+        "{\"@odata.id\":\"$base/roles($roleid)\"}"; then
+        cat "$err" >&2
+        assigned=$(rest GET "$base/systemusers($uid)/systemuserroles_association?%24select=roleid&%24filter=roleid%20eq%20$roleid" \
+          '.value[0].roleid // empty') || fail "role assignment verification failed"
+        [ "$assigned" = "$roleid" ] || fail "role assignment failed"
       fi
-
-      rm -f "$err"
+      echo "OK Power Platform: $PP_ENV"
     EOT
   }
 
@@ -954,43 +1064,98 @@ resource "terraform_data" "pp_app_user" {
     interpreter = ["/bin/bash", "-c"]
     quiet       = true
 
+    environment = {
+      PP_URL = self.input.url
+      PP_APP = self.input.app_id
+      PP_ENV = self.input.env_name
+      # Support resources created before timeout was stored in state.
+      PP_TIMEOUT = tostring(try(self.input.timeout_seconds, 30))
+    }
+
     command = <<-EOT
-      set -uo pipefail
+      set -euo pipefail
+      base="$PP_URL/api/data/v9.2"
+      umask 077
+      work=$(mktemp -d)
+      err="$work/error"
+      touch "$err"
+      trap 'rm -rf "$work"' EXIT
+      authenticate() {
+        command -v curl >/dev/null && command -v jq >/dev/null || fail "curl and jq are required"
+        local token
+        token=$(timeout --kill-after=5s "$PP_TIMEOUT" az account get-access-token \
+          --resource "$PP_URL" --query accessToken -o tsv --only-show-errors 2>"$err") || fail "token acquisition failed"
+        [ -n "$token" ] || fail "token acquisition returned an empty token"
+        printf 'Authorization: Bearer %s\n' "$token" > "$work/auth"
+      }
+      # rest METHOD URL [jq filter] [JSON body]
+      # Do not retry writes with unknown outcomes.
+      rest() {
+        local method="$1" url="$2" query="$${3:-empty}" body="$${4:-}" status rc
+        local args=()
+        [ -z "$body" ] || args+=(--data-binary "$body")
+        : > "$err"
+        status=$(curl --disable --silent --show-error --globoff --proto '=https' \
+          --connect-timeout "$PP_TIMEOUT" --max-time "$PP_TIMEOUT" \
+          --request "$method" --url "$url" \
+          --header "@$work/auth" --header 'Accept: application/json' \
+          --header 'Content-Type: application/json' --header 'OData-Version: 4.0' \
+          --header 'Prefer: return=representation' \
+          --output "$work/response" --write-out '%%{http_code}' "$${args[@]}" 2>"$err") || {
+            rc=$?
+            case "$rc" in
+              6|7|28) printf 'Unavailable transport (curl %s)\n' "$rc" >> "$err" ;;
+            esac
+            return "$rc"
+          }
+        case "$status" in
+          2??) ;;
+          *) printf 'HTTP %s\n' "$status" > "$err"
+             cat "$work/response" >> "$err"
+             return 1 ;;
+        esac
+        if [ "$method" = GET ]; then
+          jq -e '.value | type == "array"' "$work/response" >/dev/null 2>"$err" || {
+            echo 'Invalid Dataverse collection response' >> "$err"
+            return 1
+          }
+        fi
+        [ "$query" = empty ] || jq -r "$query" "$work/response" 2>"$err"
+      }
+      fail() {
+        echo "ERROR Power Platform: $PP_ENV - $1; cleanup incomplete" >&2
+        cat "$err" >&2
+        exit 1
+      }
 
-      base="${self.input.url}/api/data/v9.2"
-      res="${self.input.url}"
-      app="${self.input.app_id}"
-      env="${self.input.env_name}"
+      authenticate
 
-      uid=$(az rest --method get \
-        --url "$base/systemusers?%24select=systemuserid&%24filter=applicationid%20eq%20$app" \
-        --resource "$res" \
-        --only-show-errors \
-        --query "value[0].systemuserid" \
-        -o tsv 2>/dev/null)
-
-      if [ -z "$uid" ]; then
-        echo "SKIP Power Platform: $env"
+      user=$(rest GET "$base/systemusers?%24select=systemuserid,isdisabled&%24filter=applicationid%20eq%20$PP_APP%20and%20deletedstate%20eq%200" \
+        '.value[0] // empty | if (.systemuserid | type) != "string" or (.isdisabled | type) != "boolean" then error("Invalid user ID or disabled status") else [.systemuserid, .isdisabled] | @tsv end') || fail "app user lookup failed"
+      if [ -z "$user" ]; then
+        echo "SKIP Power Platform: $PP_ENV - app user absent"
         exit 0
       fi
+      IFS=$'\t' read -r uid disabled <<< "$user"
 
-      if az rest --method patch \
-        --url "$base/systemusers($uid)" \
-        --resource "$res" \
-        --headers "Content-Type=application/json" \
-        --body '{"isdisabled":true}' \
-        --only-show-errors \
-        -o none >/dev/null 2>&1; then
-
-        echo "OK Power Platform disabled: $env"
-      else
-        echo "ERROR Power Platform: $env - disable failed" >&2
-        exit 1
+      if [ "$disabled" != true ]; then
+        rest PATCH "$base/systemusers($uid)" \
+          empty '{"isdisabled":true}' || fail "disable failed"
       fi
+
+      # Allow a forbidden delete only after the user is confirmed disabled.
+      if ! rest DELETE "$base/systemusers($uid)"; then
+        if grep -q '^HTTP 403$' "$err"; then
+          echo "WARN Power Platform: $PP_ENV - user disabled but deletion denied; leaving user in Dataverse and completing Terraform cleanup" >&2
+          cat "$err" >&2
+          exit 0
+        fi
+        fail "app user deletion failed (check owned records and delete privileges)"
+      fi
+      echo "OK Power Platform disabled, app user deleted: $PP_ENV"
     EOT
   }
 }
-
 
 resource "azurerm_policy_definition" "auto_onboard" {
   for_each = local.policy_scope_management_group_ids
