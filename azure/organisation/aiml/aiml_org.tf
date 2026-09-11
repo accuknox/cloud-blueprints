@@ -365,6 +365,17 @@ variable "powerplatform_request_timeout_seconds" {
   }
 }
 
+variable "powerplatform_discovery_timeout_seconds" {
+  description = "Maximum seconds for the entire BAP environment discovery, including all pages."
+  type        = number
+  default     = 120
+
+  validation {
+    condition     = var.powerplatform_discovery_timeout_seconds >= 5 && var.powerplatform_discovery_timeout_seconds <= 600 && floor(var.powerplatform_discovery_timeout_seconds) == var.powerplatform_discovery_timeout_seconds
+    error_message = "powerplatform_discovery_timeout_seconds must be an integer between 5 and 600."
+  }
+}
+
 variable "powerplatform_skip_environment_ids" {
   description = "Environment IDs where registration is known to be unsupported. Creation is skipped, but existing users are still cleaned up on destroy."
   type        = set(string)
@@ -827,8 +838,10 @@ resource "azurerm_role_assignment" "accuknox_ml_scanner" {
 data "external" "powerplatform_environments" {
   count = var.enable_powerplatform_registration ? 1 : 0
 
-  program = ["bash", "-c", <<-EOT
+  program = ["timeout", "--kill-after=5s", "${var.powerplatform_discovery_timeout_seconds}s", "bash", "-c", <<-EOT
     set -euo pipefail
+    trap 'echo "Power Platform discovery exceeded its total time limit; no inventory returned" >&2; exit 124' TERM
+    page=0
     command -v jq >/dev/null || { echo "jq is required for Power Platform discovery" >&2; exit 1; }
     work=$(mktemp -d)
     trap 'rm -rf "$work"' EXIT
@@ -844,8 +857,15 @@ data "external" "powerplatform_environments" {
         exit 1
       fi
       printf '%s\n' "$url" >> "$work/visited"
-      timeout --kill-after=5s "$2" az rest --method get --url "$url" \
-        --resource "https://api.bap.microsoft.com/" --only-show-errors -o json > "$work/page"
+      page=$((page + 1))
+      if timeout --foreground --kill-after=5s "$2" az rest --method get --url "$url" \
+        --resource "https://api.bap.microsoft.com/" --only-show-errors -o json > "$work/page"; then
+        :
+      else
+        rc=$?
+        echo "Power Platform discovery failed on page $page (exit $rc, per-request limit $2 seconds); no inventory returned" >&2
+        exit "$rc"
+      fi
       jq -e '.value | type == "array"' "$work/page" >/dev/null
       jq -c '.value[] | select(.properties.linkedEnvironmentMetadata.instanceUrl != null and .properties.linkedEnvironmentMetadata.instanceUrl != "") |
         {id: .name, name: .properties.displayName, url: .properties.linkedEnvironmentMetadata.instanceUrl, state: .properties.linkedEnvironmentMetadata.instanceState}' \
