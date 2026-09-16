@@ -8,8 +8,13 @@ Parameters:
 
   Regions:
     Type: String
-    Description: "Comma-separated list of AWS regions where the StackSet should be deployed."
+    Description: "Comma-separated list of AWS regions used for the cloud-scanning IAM role. Only the first region is used because IAM is global."
     Default: "us-east-1,us-west-1,us-west-2,us-east-2,ca-central-1,eu-west-1,eu-central-1,eu-west-2,eu-west-3,eu-north-1,ap-south-1,ap-northeast-1,ap-northeast-2,ap-southeast-1,ap-southeast-2,sa-east-1,af-south-1,me-south-1,eu-south-1,ap-east-1"
+
+  ScpAlertRegions:
+    Type: CommaDelimitedList
+    Description: "Regions where SCP alert forwarding rules are deployed in every targeted organization account. Defaults to every AWS commercial region enabled by default; add opt-in regions after enabling them in all targeted accounts."
+    Default: "us-east-1,us-east-2,us-west-1,us-west-2,ap-south-1,ap-northeast-1,ap-northeast-2,ap-northeast-3,ap-southeast-1,ap-southeast-2,ca-central-1,eu-central-1,eu-north-1,eu-west-1,eu-west-2,eu-west-3,sa-east-1"
 
   AutoDeploy:
     Type: String
@@ -281,10 +286,15 @@ Resources:
       Parameters:
         - ParameterKey: CentralEventBusArn
           ParameterValue: !GetAtt ScpSupportStack.Outputs.ScpAlertEventBusArn
+        - ParameterKey: ForwarderRoleName
+          ParameterValue: !Join ["-", ["AK-ScpAlertForwarder", !Select [0, !Split ["-", !Select [2, !Split ["/", !Ref "AWS::StackId"]]]]]]
+        - ParameterKey: ForwarderRoleRegion
+          ParameterValue: !Select [0, !Ref ScpAlertRegions]
       OperationPreferences:
         FailureTolerancePercentage: 99
         MaxConcurrentPercentage: 100
-        RegionConcurrencyType: PARALLEL
+        RegionConcurrencyType: SEQUENTIAL
+        RegionOrder: !Ref ScpAlertRegions
       StackInstancesGroup:
         - DeploymentTargets:
             AccountFilterType:
@@ -302,12 +312,7 @@ Resources:
               - - !Ref RootOrganizationalUnitId
               - !Ref OrganizationalUnitIds
             Accounts: !If [HasAccountIds, !Ref AccountIds, !Ref "AWS::NoValue"]
-          Regions:
-            - !Select
-              - 0
-              - !Split
-                - ","
-                - !Ref Regions
+          Regions: !Ref ScpAlertRegions
       StackSetName: !Sub AK-ScpAlertForwarder-${AWS::StackName}
       TemplateBody: |
         {
@@ -316,12 +321,32 @@ Resources:
             "CentralEventBusArn": {
               "Type": "String",
               "Description": "Management account EventBridge bus ARN for AWS SCP alert candidates."
+            },
+            "ForwarderRoleName": {
+              "Type": "String",
+              "Description": "Name of the single IAM forwarding role shared by all regional rules in this account."
+            },
+            "ForwarderRoleRegion": {
+              "Type": "String",
+              "Description": "Region whose stack instance owns the account-level IAM forwarding role."
+            }
+          },
+          "Conditions": {
+            "CreateScpAlertForwarderRole": {
+              "Fn::Equals": [
+                {"Ref": "AWS::Region"},
+                {"Ref": "ForwarderRoleRegion"}
+              ]
             }
           },
           "Resources": {
             "ScpAlertForwarderRole": {
               "Type": "AWS::IAM::Role",
+              "Condition": "CreateScpAlertForwarderRole",
               "Properties": {
+                "RoleName": {
+                  "Ref": "ForwarderRoleName"
+                },
                 "AssumeRolePolicyDocument": {
                   "Version": "2012-10-17",
                   "Statement": [
@@ -375,7 +400,11 @@ Resources:
                       "Ref": "CentralEventBusArn"
                     },
                     "RoleArn": {
-                      "Fn::GetAtt": ["ScpAlertForwarderRole", "Arn"]
+                      "Fn::If": [
+                        "CreateScpAlertForwarderRole",
+                        {"Fn::GetAtt": ["ScpAlertForwarderRole", "Arn"]},
+                        {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${ForwarderRoleName}"}
+                      ]
                     }
                   }
                 ]
