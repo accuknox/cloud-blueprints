@@ -8,7 +8,7 @@ Parameters:
 
   Regions:
     Type: String
-    Description: "Comma-separated list of AWS regions where the StackSet should be deployed."
+    Description: "Comma-separated list of AWS regions used for the cloud-scanning IAM role. Only the first region is used because IAM is global."
     Default: "us-east-1,us-west-1,us-west-2,us-east-2,ca-central-1,eu-west-1,eu-central-1,eu-west-2,eu-west-3,eu-north-1,ap-south-1,ap-northeast-1,ap-northeast-2,ap-southeast-1,ap-southeast-2,sa-east-1,af-south-1,me-south-1,eu-south-1,ap-east-1"
 
   AutoDeploy:
@@ -63,19 +63,11 @@ Parameters:
     Default: ""
     AllowedPattern: "^$|^o-[a-z0-9]{10,32}$"
     ConstraintDescription: "Leave empty when SCP support is disabled, or provide a valid AWS Organizations ID, for example o-xxxxxxxxxx."
-    Description: "AWS Organization ID allowed to send member-account SCP alert events to the management account event bus. Required only when EnableScpSupport is true."
-
-  RootOrganizationalUnitId:
-    Type: String
-    Default: ""
-    AllowedPattern: "^$|^r-[a-z0-9]{4,32}$"
-    ConstraintDescription: "Leave empty when SCP support is disabled, or provide a valid AWS Organizations root ID, for example r-xxxx."
-    Description: "AWS Organizations root ID used to deploy SCP alert forwarders. Required only when EnableScpSupport is true."
+    Description: "AWS Organization ID included in normalized SCP alerts. Required only when EnableScpSupport is true."
 
 Conditions:
   CloudScanningEnabled: !Equals [!Ref EnableCloudScanning, "true"]
   HasAccountIds: !Not [!Equals [!Join [",", !Ref AccountIds], ""]]
-  HasRootOrganizationalUnitId: !Not [!Equals [!Ref RootOrganizationalUnitId, ""]]
   UseInclude: !Equals [!Ref AccountFilterType, "INCLUDE"]
   UseExclude: !Equals [!Ref AccountFilterType, "EXCLUDE"]
   AutoDeployEnabled: !Equals [!Ref AutoDeploy, "true"]
@@ -243,19 +235,19 @@ Resources:
     Type: AWS::CloudFormation::Stack
     Condition: CreateScpSupportStack
     Properties:
-      TemplateURL: !Sub https://cloud-security-cnapp-${AWS::Region}.s3.${AWS::Region}.amazonaws.com/dev-1d53230/aws-scp-support/aws-scp-support.yaml
+      TemplateURL: https://cloud-security-cnapp.s3.us-east-1.amazonaws.com/aws/organisation/aws-scp-support/dev-1d53230/aws-scp-support.yaml
       TimeoutInMinutes: 30
       Parameters:
         ProjectName: aws-scp-support
         ResourceNameSuffix: !Select [0, !Split ["-", !Select [2, !Split ["/", !Ref "AWS::StackId"]]]]
         ApiStageName: dev
         EnableJwtAuthorizer: "true"
-        EnforcementLambdaS3Bucket: !Sub cloud-security-cnapp-${AWS::Region}
-        EnforcementLambdaS3Key: dev-1d53230/aws-scp-support/enforcement-lambda.zip
-        AuthorizerLambdaS3Bucket: !Sub cloud-security-cnapp-${AWS::Region}
-        AuthorizerLambdaS3Key: dev-1d53230/aws-scp-support/authorizer-lambda.zip
-        ScpDetectorLambdaS3Bucket: !Sub cloud-security-cnapp-${AWS::Region}
-        ScpDetectorLambdaS3Key: dev-1d53230/aws-scp-support/scp-detector-lambda.zip
+        EnforcementLambdaS3Bucket: cloud-security-cnapp
+        EnforcementLambdaS3Key: aws/organisation/aws-scp-support/dev-1d53230/enforcement-lambda.zip
+        AuthorizerLambdaS3Bucket: cloud-security-cnapp
+        AuthorizerLambdaS3Key: aws/organisation/aws-scp-support/dev-1d53230/authorizer-lambda.zip
+        ScpDetectorLambdaS3Bucket: cloud-security-cnapp
+        ScpDetectorLambdaS3Key: aws/organisation/aws-scp-support/dev-1d53230/scp-s3-detector-lambda.zip
         ScpAlertsWebhookUrl: https://cwpp.dev.accuknox.com/aws/alerts
         ScpAlertsTenantId: !Ref ScpAlertsTenantId
         ScpAlertAllowedPrincipalOrgId: !Ref ScpAwsOrganizationId
@@ -263,126 +255,8 @@ Resources:
         JwtExpectedIssuer: cspm.dev.accuknox.com
         CreateScpAlertCloudTrail: "true"
         ScpAlertCloudTrailLogRetentionDays: 1
+        ScpAlertDryRun: "false"
         ScpComponentName: cloud-governance
-
-  ScpAlertForwarderStackSet:
-    Type: AWS::CloudFormation::StackSet
-    Condition: CreateScpSupportStack
-    DependsOn: ScpSupportStack
-    Properties:
-      AutoDeployment:
-        Enabled: !Ref AutoDeploy
-        RetainStacksOnAccountRemoval:
-          !If [AutoDeployEnabled, false, !Ref "AWS::NoValue"]
-      PermissionModel: SERVICE_MANAGED
-      Capabilities:
-        - CAPABILITY_NAMED_IAM
-      Description: Forwards member-account authorization failure CloudTrail events to the management account SCP alert event bus.
-      Parameters:
-        - ParameterKey: CentralEventBusArn
-          ParameterValue: !GetAtt ScpSupportStack.Outputs.ScpAlertEventBusArn
-      OperationPreferences:
-        FailureTolerancePercentage: 99
-        MaxConcurrentPercentage: 100
-        RegionConcurrencyType: PARALLEL
-      StackInstancesGroup:
-        - DeploymentTargets:
-            AccountFilterType:
-              !If [
-                HasAccountIds,
-                !If [
-                  UseExclude,
-                  DIFFERENCE,
-                  !If [UseInclude, INTERSECTION, NONE],
-                ],
-                NONE,
-              ]
-            OrganizationalUnitIds: !If
-              - HasRootOrganizationalUnitId
-              - - !Ref RootOrganizationalUnitId
-              - !Ref OrganizationalUnitIds
-            Accounts: !If [HasAccountIds, !Ref AccountIds, !Ref "AWS::NoValue"]
-          Regions:
-            - !Select
-              - 0
-              - !Split
-                - ","
-                - !Ref Regions
-      StackSetName: !Sub AK-ScpAlertForwarder-${AWS::StackName}
-      TemplateBody: |
-        {
-          "AWSTemplateFormatVersion": "2010-09-09",
-          "Parameters": {
-            "CentralEventBusArn": {
-              "Type": "String",
-              "Description": "Management account EventBridge bus ARN for AWS SCP alert candidates."
-            }
-          },
-          "Resources": {
-            "ScpAlertForwarderRole": {
-              "Type": "AWS::IAM::Role",
-              "Properties": {
-                "AssumeRolePolicyDocument": {
-                  "Version": "2012-10-17",
-                  "Statement": [
-                    {
-                      "Effect": "Allow",
-                      "Principal": {
-                        "Service": "events.amazonaws.com"
-                      },
-                      "Action": "sts:AssumeRole"
-                    }
-                  ]
-                },
-                "Policies": [
-                  {
-                    "PolicyName": "PutScpAlertEvents",
-                    "PolicyDocument": {
-                      "Version": "2012-10-17",
-                      "Statement": [
-                        {
-                          "Effect": "Allow",
-                          "Action": "events:PutEvents",
-                          "Resource": {
-                            "Ref": "CentralEventBusArn"
-                          }
-                        }
-                      ]
-                    }
-                  }
-                ]
-              }
-            },
-            "ScpAlertForwarderRule": {
-              "Type": "AWS::Events::Rule",
-              "Properties": {
-                "State": "ENABLED",
-                "EventPattern": {
-                  "detail-type": ["AWS API Call via CloudTrail"],
-                  "detail": {
-                    "eventType": ["AwsApiCall"],
-                    "errorCode": [
-                      {
-                        "exists": true
-                      }
-                    ]
-                  }
-                },
-                "Targets": [
-                  {
-                    "Id": "CentralScpAlertBus",
-                    "Arn": {
-                      "Ref": "CentralEventBusArn"
-                    },
-                    "RoleArn": {
-                      "Fn::GetAtt": ["ScpAlertForwarderRole", "Arn"]
-                    }
-                  }
-                ]
-              }
-            }
-          }
-        }
 
 Outputs:
   ManagementAccountRoleArn:
