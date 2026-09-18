@@ -27,11 +27,10 @@ cp "${ROOT_DIR}/authorizer_lambda/"*.py "${BUILD_DIR}/authorizer-lambda/"
   zip -qr "${DIST_DIR}/authorizer-lambda.zip" .
 )
 
-(
-  cd "${ROOT_DIR}/scp-detector"
-  zip -qr "${DIST_DIR}/scp-detector-lambda.zip" .
-)
+zip -q -j \
+  "${DIST_DIR}/scp-s3-detector-lambda.zip" \
+  "${ROOT_DIR}/scp-s3-detector/lambda_function.py"
 
 printf 'Created %s\n' "${DIST_DIR}/enforcement-lambda.zip"
 printf 'Created %s\n' "${DIST_DIR}/authorizer-lambda.zip"
-printf 'Created %s\n' "${DIST_DIR}/scp-detector-lambda.zip"
+printf 'Created %s\n' "${DIST_DIR}/scp-s3-detector-lambda.zip"
