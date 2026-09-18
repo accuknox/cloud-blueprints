@@ -1,32 +1,26 @@
-output "mode" {
-  description = "Subscription selection mode in effect."
-  value       = var.mode
-}
-
+# Simplified lighthouse outputs
 output "lighthouse_definition_id" {
-  description = "Resource ID of the shared Lighthouse registration definition."
-  value       = azurerm_lighthouse_definition.this.id
+  description = "ID of the shared lighthouse definition."
+  value       = azurerm_lighthouse_definition.shared_lighthouse_definition.id
 }
 
-output "onboarded_subscription_ids" {
-  description = "Subscriptions that receive a Lighthouse assignment from this run."
-  value       = sort(tolist(local.target_subscription_ids))
-}
-
-output "skipped_inactive_subscriptions" {
-  description = "Subscriptions selected by the mode rules but skipped because of their state (Disabled / Warned / Deleted)."
-  value       = local.skipped_inactive_subscriptions
-}
-
-output "effective_exclusions" {
-  description = "Exclusions applied to the direct assignments and to the auto-onboarding policy (not_scopes)."
+output "lighthouse_assignments" {
+  description = "Lighthouse assignments created."
   value = {
-    subscription_ids     = sort(tolist(local.excluded_subscription_ids))
-    management_group_ids = var.mode == "exclude" ? sort(tolist(local.excluded_management_group_ids)) : []
+    include_extra_subscriptions = var.mode == "include" ? [for a in azurerm_lighthouse_assignment.include_extra_subscriptions : a.id] : []
+    included_mg_subscriptions   = var.mode == "include" ? [for k, v in azurerm_lighthouse_assignment.included_mg_subscriptions : v.id] : []
+    exclude_mode_subscriptions  = var.mode == "exclude" ? [for k, v in azurerm_lighthouse_assignment.exclude_mode_subscriptions : v.id] : []
+    exclude_mode_exceptions     = var.mode == "exclude" ? [for a in azurerm_lighthouse_assignment.exclude_mode_exceptions : a.id] : []
   }
 }
 
-output "auto_onboarding_policy_assignment_ids" {
-  description = "Policy assignment IDs keyed by management group (empty when enable_auto_policy = false)."
-  value       = { for mg, pa in azurerm_management_group_policy_assignment.auto_onboard : mg => pa.id }
+output "target_subscription_ids" {
+  description = "Subscription IDs that will be onboarded based on current mode and configuration."
+  value = var.mode == "include" ? concat(
+    var.include_extra_subscription_ids,
+    local.include_mode_subscription_ids
+  ) : concat(
+    local.exclude_mode_subscription_ids,
+    var.include_exception_subscription_ids
+  )
 }
