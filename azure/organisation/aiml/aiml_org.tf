@@ -303,72 +303,60 @@ variable "role_definition_propagation_delay" {
   }
 }
 
-variable "ml_scanner_custom_role_actions" {
-  description = "Control-plane actions for the custom ML scanner role. These are management-plane '*/action' permissions, so they belong in 'actions' (not 'data_actions')."
-  type        = list(string)
-  default = [
-    "Microsoft.Resources/subscriptions/read",
-    "Microsoft.Resources/subscriptions/resourceGroups/read",
-    "Microsoft.Resources/subscriptions/resourceGroups/resources/read",
+variable "custom_role_permissions" {
+  type = object({
+    actions      = list(string)
+    data_actions = list(string)
+  })
+  default = {
+    actions = [
+      "Microsoft.Resources/subscriptions/read",
+      "Microsoft.Resources/subscriptions/resourceGroups/read",
+      "Microsoft.Resources/subscriptions/resourceGroups/resources/read",
 
-    "Microsoft.MachineLearningServices/workspaces/read",
-    "Microsoft.MachineLearningServices/workspaces/*/read",
+      "Microsoft.MachineLearningServices/workspaces/read",
+      "Microsoft.MachineLearningServices/workspaces/*/read",
 
-    "Microsoft.CognitiveServices/accounts/read",
-    "Microsoft.CognitiveServices/accounts/projects/read",
-    "Microsoft.CognitiveServices/accounts/deployments/read",
+      "Microsoft.CognitiveServices/accounts/read",
+      "Microsoft.CognitiveServices/accounts/projects/read",
+      "Microsoft.CognitiveServices/accounts/deployments/read",
 
-    "Microsoft.MachineLearningServices/workspaces/onlineEndpoints/score/action",
-    "Microsoft.MachineLearningServices/workspaces/serverlessEndpoints/listKeys/action",
+      "Microsoft.MachineLearningServices/workspaces/onlineEndpoints/score/action",
+      "Microsoft.MachineLearningServices/workspaces/serverlessEndpoints/listKeys/action",
 
-    # classic Foundry / classic Agent Service conversation
-    "Microsoft.MachineLearningServices/workspaces/agents/action",
+      # classic Foundry / classic Agent Service conversation
+      "Microsoft.MachineLearningServices/workspaces/agents/action",
 
-    # optional
-    "Microsoft.MachineLearningServices/workspaces/onlineEndpoints/token/action", # only auth_mode=aml_token endpoints
-  ]
+      "Microsoft.MachineLearningServices/workspaces/onlineEndpoints/token/action",
+    ]
+
+    data_actions = [
+      "Microsoft.CognitiveServices/accounts/OpenAI/deployments/chat/completions/action",
+      "Microsoft.CognitiveServices/accounts/OpenAI/deployments/embeddings/action",
+
+      "Microsoft.CognitiveServices/accounts/OpenAI/assistants/read",
+      "Microsoft.CognitiveServices/accounts/OpenAI/assistants/threads/read",
+      "Microsoft.CognitiveServices/accounts/OpenAI/assistants/threads/write",
+      "Microsoft.CognitiveServices/accounts/OpenAI/assistants/threads/messages/read",
+      "Microsoft.CognitiveServices/accounts/OpenAI/assistants/threads/messages/write",
+      "Microsoft.CognitiveServices/accounts/OpenAI/assistants/threads/runs/read",
+      "Microsoft.CognitiveServices/accounts/OpenAI/assistants/threads/runs/write",
+      "Microsoft.CognitiveServices/accounts/OpenAI/assistants/threads/runs/steps/read",
+
+      "Microsoft.CognitiveServices/accounts/AIServices/agents/read",
+      "Microsoft.CognitiveServices/accounts/AIServices/agents/write",
+      "Microsoft.CognitiveServices/accounts/AIServices/endpoints/interact/action",
+
+      "Microsoft.CognitiveServices/accounts/AIServices/evaluations/write",
+      "Microsoft.CognitiveServices/accounts/MaaS/chat/completions/action",
+      "Microsoft.CognitiveServices/accounts/AIServices/applications/invoke/action",
+      "Microsoft.CognitiveServices/accounts/AIServices/responses/read",
+      "Microsoft.CognitiveServices/accounts/AIServices/responses/write",
+    ]
+  }
+  description = "Permissions for the AccuKnox custom role used for AI asset inventory and red teaming. actions discover AI resources and call ML endpoints; data_actions send prompts to model deployments and run agent conversations"
 }
 
-# OpenAI and AI Foundry permissions are data actions, so Azure rejects a role definition
-# that lists them under 'actions'. They live in data_actions of the same single custom
-# role, which is created once at the management group scope and assigned from that one
-# definition to every onboarded subscription.
-variable "ml_scanner_custom_role_data_actions" {
-  description = "Data-plane actions for the custom ML scanner role: Azure OpenAI inference plus the Assistants and AI Foundry agent APIs."
-  type        = list(string)
-  default = [
-    "Microsoft.CognitiveServices/accounts/OpenAI/deployments/chat/completions/action",
-    "Microsoft.CognitiveServices/accounts/OpenAI/deployments/embeddings/action",
-
-    # classic Assistants-compatible agent API
-    "Microsoft.CognitiveServices/accounts/OpenAI/assistants/read",
-    "Microsoft.CognitiveServices/accounts/OpenAI/assistants/threads/read",
-    "Microsoft.CognitiveServices/accounts/OpenAI/assistants/threads/write",
-    "Microsoft.CognitiveServices/accounts/OpenAI/assistants/threads/messages/read",
-    "Microsoft.CognitiveServices/accounts/OpenAI/assistants/threads/messages/write",
-    "Microsoft.CognitiveServices/accounts/OpenAI/assistants/threads/runs/read",
-    "Microsoft.CognitiveServices/accounts/OpenAI/assistants/threads/runs/write",
-    "Microsoft.CognitiveServices/accounts/OpenAI/assistants/threads/runs/steps/read",
-
-    # current Foundry agent API
-    "Microsoft.CognitiveServices/accounts/AIServices/agents/read",
-    "Microsoft.CognitiveServices/accounts/AIServices/agents/write",
-    "Microsoft.CognitiveServices/accounts/AIServices/endpoints/interact/action",
-
-    "Microsoft.CognitiveServices/accounts/AIServices/evaluations/write",
-    "Microsoft.CognitiveServices/accounts/MaaS/chat/completions/action",
-    "Microsoft.CognitiveServices/accounts/AIServices/applications/invoke/action",
-    "Microsoft.CognitiveServices/accounts/AIServices/responses/read",  
-    "Microsoft.CognitiveServices/accounts/AIServices/responses/write",
-  ]
-}
-
-# deliberately NOT granted:
-#   Microsoft.CognitiveServices/accounts/AIServices/agents/delete
-#   Microsoft.CognitiveServices/accounts/AIServices/evaluations/delete
-#   Microsoft.CognitiveServices/accounts/AIServices/responses/delete
-#   Microsoft.CognitiveServices/accounts/listKeys/action
-#   Microsoft.Storage/storageAccounts/listKeys/action
 
 # --- Power Platform (Dataverse) ------------------------------------------------------
 # Power Platform sits outside the Azure Resource Manager hierarchy, so neither Lighthouse
@@ -723,12 +711,8 @@ locals {
     }
   } : {}
 
-  # Preferred scope for every newly-created custom role: the management group, so one
-  # definition covers all of its child subscriptions instead of one definition per
-  # subscription. Falls back to the context subscription when no management group is used.
-  custom_role_desired_scope = local.uses_root_management_group ? "/providers/Microsoft.Management/managementGroups/${local.root_management_group_id}" : "/subscriptions/${local.context_subscription_id}"
-
-  ml_scanner_desired_role_scope = local.custom_role_desired_scope
+  # Preferred scope for a newly-created ML Scanner role.
+  ml_scanner_desired_role_scope = local.uses_root_management_group ? "/providers/Microsoft.Management/managementGroups/${local.root_management_group_id}" : "/subscriptions/${local.context_subscription_id}"
 }
 
 # Discover an existing custom role with the same tenant-wide name.
@@ -831,8 +815,8 @@ resource "azurerm_role_definition" "accuknox_ml_scanner" {
   description = "AccuKnox CSPM: AML endpoint scanning plus Azure OpenAI, Assistants and AI Foundry agent access for AI/ML scanning"
 
   permissions {
-    actions          = var.ml_scanner_custom_role_actions
-    data_actions     = var.ml_scanner_custom_role_data_actions
+    actions          = var.custom_role_permissions.actions
+    data_actions     = var.custom_role_permissions.data_actions
     not_actions      = []
     not_data_actions = []
   }
@@ -1134,7 +1118,7 @@ resource "terraform_data" "pp_app_user" {
     EOT
   }
 
-   provisioner "local-exec" {
+  provisioner "local-exec" {
     when        = destroy
     interpreter = ["/bin/bash", "-c"]
     quiet       = true
@@ -1422,10 +1406,6 @@ output "ml_scanner_role_definition_id" {
   value       = one(azurerm_role_definition.accuknox_ml_scanner[*].role_definition_resource_id)
 }
 
-output "aiml_custom_role_scope" {
-  description = "Scope at which new custom roles are created - the management group when one is in use, otherwise the context subscription."
-  value       = local.custom_role_desired_scope
-}
 
 output "powerplatform_selected_environments" {
   description = "Environments selected for AccuKnox app-user registration (display name => Dataverse URL)."

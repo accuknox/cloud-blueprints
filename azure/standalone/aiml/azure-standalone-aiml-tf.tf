@@ -148,7 +148,7 @@ resource "azurerm_role_assignment" "role" {
 }
 
 resource "azurerm_role_definition" "custom_accuknox_aiml_role" {
-  name        = "AccuKnox-AIML-Custom-Role_per_testing"
+  name        = "AccuKnox-AIML-Custom-Role"
   scope       = data.azurerm_subscription.current.id
   description = "Allows AccuKnox to inventory AI assets and run red teaming tests against Azure Machine Learning endpoints, Azure OpenAI deployments and assistants, and AI Foundry models and agents"
   permissions {
