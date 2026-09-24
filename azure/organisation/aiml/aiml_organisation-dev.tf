@@ -742,13 +742,8 @@ data "external" "ml_scanner_existing_role" {
     role_id=$(az role definition list \
       --name "$role_name" \
       --custom-role-only true \
-      --query "[0].id" \
-      -o tsv 2>/dev/null || true)
-
-    # Azure CLI output may contain CR (\r).
-    role_id="$${role_id//$'\r'/}"
-
-    jq -n --arg id "$role_id" '{"id":$id}'
+      --query "[0].id" -o tsv 2>/dev/null || true)
+    printf '{"id":"%s"}\n' "$role_id"
   EOT
   ]
 }
