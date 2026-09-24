@@ -1,3 +1,14 @@
+variable "app_display_name" {
+  type        = string
+  default     = "Azure-AIML-Onboarding-App"
+  description = "Display name of the Azure AD Application"
+}
+variable "subscription_id" {
+  type        = string
+  default     = ""
+  description = "Azure Subscription ID. Leave empty to use current subscription"
+}
+
 terraform {
   required_providers {
     azurerm = {
@@ -17,106 +28,101 @@ terraform {
   }
 }
 
-provider "azurerm" {
-  features {}
-  skip_provider_registration = true
-  subscription_id            = var.subscription_id != "" ? var.subscription_id : null
+
+
+# Microsoft Graph delegated permissions declared on the app registration.
+locals {
+  graph_delegated_scopes = {
+    "Directory.Read.All" = "5778995a-e1bf-45b8-affa-663a9f3f4d04"
+  }
 }
 
-provider "azuread" {}
-
-# ---------------------------------------------------------------------------
-# Variables
-# ---------------------------------------------------------------------------
-
-variable "app_display_name" {
-  type        = string
-  default     = "Azure-AIML-Onboarding-App"
-  description = "Display name of the Azure AD Application"
-}
-
-variable "subscription_id" {
-  type        = string
-  default     = ""
-  description = "Azure Subscription ID. Leave empty to use current subscription"
-}
-
-variable "builtin_roles" {
-  type = list(string)
-  default = [
+# Built-in roles granted to the AccuKnox service principal at subscription scope.
+locals {
+  builtin_roles = [
     "Reader",                         # acdd72a7-3385-48ef-bd42-f606fba81ae7
     "Storage Blob Data Reader",       # 2a2b9908-6ea1-4ae2-8e65-a410df84e7d1
     "Cognitive Services Data Reader", # b59867f0-fa02-499b-be73-45a86b5b3e1c
     "Foundry Agent Consumer",         # eed3b665-ab3a-47b6-8f48-c9382fb1dad6
   ]
-  description = "Built-in roles granted to the AccuKnox service principal at subscription scope"
 }
 
-variable "custom_role_permissions" {
-  type = object({
-    actions      = list(string)
-    data_actions = list(string)
-  })
-  default = {
+# Classic Foundry: hub-based projects (Azure Machine Learning workspaces), classic Agent Service
+# and Azure OpenAI Assistants. Reads come from Reader and Cognitive Services Data Reader.
+locals {
+  classic_foundry_permissions = {
     actions = [
-      "Microsoft.Resources/subscriptions/read",
-      "Microsoft.Resources/subscriptions/resourceGroups/read",
-      "Microsoft.Resources/subscriptions/resourceGroups/resources/read",
-
-      "Microsoft.MachineLearningServices/workspaces/read",
-      "Microsoft.MachineLearningServices/workspaces/*/read",
-
-      "Microsoft.CognitiveServices/accounts/read",
-      "Microsoft.CognitiveServices/accounts/projects/read",
-      "Microsoft.CognitiveServices/accounts/deployments/read",
-
       "Microsoft.MachineLearningServices/workspaces/onlineEndpoints/score/action",
-      "Microsoft.MachineLearningServices/workspaces/serverlessEndpoints/listKeys/action",
-
-      # classic Foundry / classic Agent Service conversation
-      "Microsoft.MachineLearningServices/workspaces/agents/action",
-
       "Microsoft.MachineLearningServices/workspaces/onlineEndpoints/token/action",
+      "Microsoft.MachineLearningServices/workspaces/serverlessEndpoints/listKeys/action",
+      "Microsoft.MachineLearningServices/workspaces/agents/action",
     ]
-
     data_actions = [
-      "Microsoft.CognitiveServices/accounts/OpenAI/deployments/chat/completions/action",
-      "Microsoft.CognitiveServices/accounts/OpenAI/deployments/embeddings/action",
-
-      "Microsoft.CognitiveServices/accounts/OpenAI/assistants/read",
-      "Microsoft.CognitiveServices/accounts/OpenAI/assistants/threads/read",
-      "Microsoft.CognitiveServices/accounts/OpenAI/assistants/threads/write",
-      "Microsoft.CognitiveServices/accounts/OpenAI/assistants/threads/messages/read",
-      "Microsoft.CognitiveServices/accounts/OpenAI/assistants/threads/messages/write",
-      "Microsoft.CognitiveServices/accounts/OpenAI/assistants/threads/runs/read",
-      "Microsoft.CognitiveServices/accounts/OpenAI/assistants/threads/runs/write",
-      "Microsoft.CognitiveServices/accounts/OpenAI/assistants/threads/runs/steps/read",
-
-      "Microsoft.CognitiveServices/accounts/AIServices/agents/read",
       "Microsoft.CognitiveServices/accounts/AIServices/agents/write",
-      "Microsoft.CognitiveServices/accounts/AIServices/endpoints/interact/action",
-
-      "Microsoft.CognitiveServices/accounts/AIServices/evaluations/write",
-      "Microsoft.CognitiveServices/accounts/MaaS/chat/completions/action",
-      "Microsoft.CognitiveServices/accounts/AIServices/applications/invoke/action",
-      "Microsoft.CognitiveServices/accounts/AIServices/responses/read",
-      "Microsoft.CognitiveServices/accounts/AIServices/responses/write",
+      "Microsoft.CognitiveServices/accounts/OpenAI/assistants/threads/write",
+      "Microsoft.CognitiveServices/accounts/OpenAI/assistants/threads/messages/write",
+      "Microsoft.CognitiveServices/accounts/OpenAI/assistants/threads/runs/write",
     ]
   }
-  description = "Permissions for the AccuKnox custom role used for AI asset inventory and red teaming. actions discover AI resources and call ML endpoints; data_actions send prompts to model deployments and run agent conversations"
 }
 
-# ---------------------------------------------------------------------------
-# App registration and service principal
-# ---------------------------------------------------------------------------
+# New Foundry: Foundry resources and projects. Agent endpoint calls (Responses API) come from
+# Foundry Agent Consumer.
+locals {
+  new_foundry_permissions = {
+    actions = []
+    data_actions = [
+      "Microsoft.CognitiveServices/accounts/AIServices/applications/invoke/action",
+      "Microsoft.CognitiveServices/accounts/MaaS/*/action",
+      "Microsoft.CognitiveServices/accounts/AIServices/evaluations/write",
+    ]
+  }
+}
+
+# Azure OpenAI model inference, used by both classic and new Foundry.
+locals {
+  shared_model_permissions = {
+    actions = []
+    data_actions = [
+      "Microsoft.CognitiveServices/accounts/OpenAI/deployments/*/action",
+    ]
+  }
+}
+
+# Permissions for the AccuKnox custom role used for AI asset inventory and red teaming.
+locals {
+  custom_role_permissions = {
+    actions = concat(
+      local.classic_foundry_permissions.actions,
+      local.new_foundry_permissions.actions,
+      local.shared_model_permissions.actions,
+    )
+    data_actions = concat(
+      local.classic_foundry_permissions.data_actions,
+      local.new_foundry_permissions.data_actions,
+      local.shared_model_permissions.data_actions,
+    )
+  }
+}
+
+
+provider "azurerm" {
+  features {}
+  subscription_id = var.subscription_id != "" ? var.subscription_id : null
+}
+provider "azuread" {}
 
 resource "azuread_application" "accuknox" {
   display_name = var.app_display_name
   required_resource_access {
-    resource_app_id = "00000003-0000-0000-c000-000000000000"
-    resource_access {
-      id   = "5778995a-e1bf-45b8-affa-663a9f3f4d04"
-      type = "Scope"
+    resource_app_id = "00000003-0000-0000-c000-000000000000" # Microsoft Graph
+
+    dynamic "resource_access" {
+      for_each = local.graph_delegated_scopes
+      content {
+        id   = resource_access.value
+        type = "Scope"
+      }
     }
   }
 }
@@ -125,21 +131,22 @@ resource "azuread_service_principal" "accuknox_sp" {
   client_id = azuread_application.accuknox.client_id
 }
 
+resource "random_password" "password" {
+  length           = 32
+  special          = true
+  override_special = "_%@"
+}
+
 resource "azuread_service_principal_password" "client_secret" {
   service_principal_id = azuread_service_principal.accuknox_sp.id
-  end_date             = timeadd(timestamp(), "8760h")
 }
 
 data "azurerm_subscription" "current" {
   subscription_id = var.subscription_id != "" ? var.subscription_id : null
 }
 
-# ---------------------------------------------------------------------------
-# Role assignments
-# ---------------------------------------------------------------------------
-
-resource "azurerm_role_assignment" "role" {
-  for_each             = toset(var.builtin_roles)
+resource "azurerm_role_assignment" "builtin" {
+  for_each             = toset(local.builtin_roles)
   scope                = data.azurerm_subscription.current.id
   role_definition_name = each.value
   principal_id         = azuread_service_principal.accuknox_sp.object_id
@@ -148,13 +155,15 @@ resource "azurerm_role_assignment" "role" {
 }
 
 resource "azurerm_role_definition" "custom_accuknox_aiml_role" {
-  name        = "AccuKnox-AIML-Custom-Role"
+  name        = "AccuKnox-AIML-Custom-Role_TFASHISH"
   scope       = data.azurerm_subscription.current.id
   description = "Allows AccuKnox to inventory AI assets and run red teaming tests against Azure Machine Learning endpoints, Azure OpenAI deployments and assistants, and AI Foundry models and agents"
+
   permissions {
-    actions      = var.custom_role_permissions.actions
-    data_actions = var.custom_role_permissions.data_actions
+    actions      = local.custom_role_permissions.actions
+    data_actions = local.custom_role_permissions.data_actions
   }
+
   assignable_scopes = [
     data.azurerm_subscription.current.id
   ]
@@ -168,11 +177,9 @@ resource "azurerm_role_assignment" "custom_aiml_role_assignment" {
   skip_service_principal_aad_check = true
 }
 
-# ---------------------------------------------------------------------------
-# Outputs
-# ---------------------------------------------------------------------------
+data "azurerm_client_config" "current" {}
 
-output "client_id" {
+output "application_id" {
   value = azuread_application.accuknox.client_id
 }
 
@@ -182,19 +189,19 @@ output "client_secret" {
 }
 
 output "subscription_id" {
-  value = split("/", trim(data.azurerm_subscription.current.id, "/"))[1]
+  value = data.azurerm_subscription.current.id
 }
 
 output "directory_id" {
-  value = azuread_service_principal.accuknox_sp.application_tenant_id
+  value = data.azurerm_client_config.current.tenant_id
 }
 
 resource "local_file" "client_secret_and_app_sub_dir_file" {
   filename = "client_secret_and_app_sub_dir.txt"
   content  = <<-EOT
-Client ID: ${azuread_application.accuknox.client_id}
-Client Secret: "${azuread_service_principal_password.client_secret.value}"
-Subscription ID: "${split("/", trim(data.azurerm_subscription.current.id, "/"))[1]}"
-Directory ID: "${azuread_service_principal.accuknox_sp.application_tenant_id}"
-EOT
+Application ID: "${azuread_application.accuknox.client_id}"
+Client Secret: ${azuread_service_principal_password.client_secret.value}
+Subscription ID: ${data.azurerm_subscription.current.id}
+Directory ID: ${data.azurerm_client_config.current.tenant_id}
+  EOT
 }

@@ -265,21 +265,6 @@ variable "enable_aiml_access" {
   default     = true
 }
 
-variable "aiml_role_definition_ids" {
-  description = "Built-in role definition GUIDs granted to the AccuKnox service principal on every onboarded subscription for AI/ML scanning. Reader is not listed here because the Lighthouse delegation in var.authorizations already grants it."
-  type        = list(string)
-  default = [
-    "2a2b9908-6ea1-4ae2-8e65-a410df84e7d1", # Storage Blob Data Reader
-    "b59867f0-fa02-499b-be73-45a86b5b3e1c", # Cognitive Services Data Reader
-    "eed3b665-ab3a-47b6-8f48-c9382fb1dad6", # Foundry Agent Consumer
-  ]
-
-  validation {
-    condition     = alltrue([for r in var.aiml_role_definition_ids : can(regex("(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", trimspace(r)))])
-    error_message = "aiml_role_definition_ids entries must be role definition IDs (GUIDs)."
-  }
-}
-
 variable "enable_ml_scanner_custom_role" {
   description = "Create the custom \"ML scanner\" role (listing actions that no built-in read-only role covers) and assign it to the AccuKnox service principal on every onboarded subscription. Requires rights to write role definitions. Ignored when enable_aiml_access = false."
   type        = bool
@@ -303,12 +288,19 @@ variable "role_definition_propagation_delay" {
   }
 }
 
-variable "custom_role_permissions" {
-  type = object({
-    actions      = list(string)
-    data_actions = list(string)
-  })
-  default = {
+"Built-in role definition GUIDs granted to the AccuKnox service principal on every onboarded subscription for AI/ML scanning"
+
+locals {
+  aiml_builtin_role_definition_ids = [
+    "2a2b9908-6ea1-4ae2-8e65-a410df84e7d1", # Storage Blob Data Reader
+    "b59867f0-fa02-499b-be73-45a86b5b3e1c", # Cognitive Services Data Reader
+    "eed3b665-ab3a-47b6-8f48-c9382fb1dad6", # Foundry Agent Consumer
+  ]
+}
+
+# AI discovery
+locals {
+  discovery_permissions = {
     actions = [
       "Microsoft.Resources/subscriptions/read",
       "Microsoft.Resources/subscriptions/resourceGroups/read",
@@ -321,42 +313,67 @@ variable "custom_role_permissions" {
       "Microsoft.CognitiveServices/accounts/projects/read",
       "Microsoft.CognitiveServices/accounts/deployments/read",
 
-      "Microsoft.MachineLearningServices/workspaces/onlineEndpoints/score/action",
-      "Microsoft.MachineLearningServices/workspaces/serverlessEndpoints/listKeys/action",
-
-      # classic Foundry / classic Agent Service conversation
-      "Microsoft.MachineLearningServices/workspaces/agents/action",
-
-      "Microsoft.MachineLearningServices/workspaces/onlineEndpoints/token/action",
+      "Microsoft.Storage/storageAccounts/read",
     ]
-
-    data_actions = [
-      "Microsoft.CognitiveServices/accounts/OpenAI/deployments/chat/completions/action",
-      "Microsoft.CognitiveServices/accounts/OpenAI/deployments/embeddings/action",
-
-      "Microsoft.CognitiveServices/accounts/OpenAI/assistants/read",
-      "Microsoft.CognitiveServices/accounts/OpenAI/assistants/threads/read",
-      "Microsoft.CognitiveServices/accounts/OpenAI/assistants/threads/write",
-      "Microsoft.CognitiveServices/accounts/OpenAI/assistants/threads/messages/read",
-      "Microsoft.CognitiveServices/accounts/OpenAI/assistants/threads/messages/write",
-      "Microsoft.CognitiveServices/accounts/OpenAI/assistants/threads/runs/read",
-      "Microsoft.CognitiveServices/accounts/OpenAI/assistants/threads/runs/write",
-      "Microsoft.CognitiveServices/accounts/OpenAI/assistants/threads/runs/steps/read",
-
-      "Microsoft.CognitiveServices/accounts/AIServices/agents/read",
-      "Microsoft.CognitiveServices/accounts/AIServices/agents/write",
-      "Microsoft.CognitiveServices/accounts/AIServices/endpoints/interact/action",
-
-      "Microsoft.CognitiveServices/accounts/AIServices/evaluations/write",
-      "Microsoft.CognitiveServices/accounts/MaaS/chat/completions/action",
-      "Microsoft.CognitiveServices/accounts/AIServices/applications/invoke/action",
-      "Microsoft.CognitiveServices/accounts/AIServices/responses/read",
-      "Microsoft.CognitiveServices/accounts/AIServices/responses/write",
-    ]
+    data_actions = []
   }
-  description = "Permissions for the AccuKnox custom role used for AI asset inventory and red teaming. actions discover AI resources and call ML endpoints; data_actions send prompts to model deployments and run agent conversations"
 }
 
+# Classic Foundry: hub-based projects (Azure Machine Learning workspaces), classic Agent Service
+# and Azure OpenAI Assistants.
+locals {
+  classic_foundry_permissions = {
+    actions = [
+      "Microsoft.MachineLearningServices/workspaces/onlineEndpoints/score/action",
+      "Microsoft.MachineLearningServices/workspaces/onlineEndpoints/token/action",
+      "Microsoft.MachineLearningServices/workspaces/serverlessEndpoints/listKeys/action",
+      "Microsoft.MachineLearningServices/workspaces/agents/action",
+    ]
+    data_actions = [
+      "Microsoft.CognitiveServices/accounts/AIServices/agents/write",
+      "Microsoft.CognitiveServices/accounts/OpenAI/assistants/threads/write",
+      "Microsoft.CognitiveServices/accounts/OpenAI/assistants/threads/messages/write",
+      "Microsoft.CognitiveServices/accounts/OpenAI/assistants/threads/runs/write",
+    ]
+  }
+}
+
+# New Foundry: Foundry resources and projects.
+locals {
+  new_foundry_permissions = {
+    actions = []
+    data_actions = [
+      "Microsoft.CognitiveServices/accounts/AIServices/applications/invoke/action",
+      "Microsoft.CognitiveServices/accounts/MaaS/*/action",
+      "Microsoft.CognitiveServices/accounts/AIServices/evaluations/write",
+    ]
+  }
+}
+
+# Azure OpenAI model inference, used by both classic and new Foundry.
+locals {
+  shared_model_permissions = {
+    actions = []
+    data_actions = [
+      "Microsoft.CognitiveServices/accounts/OpenAI/deployments/*/action",
+    ]
+  }
+}
+
+# Built from every group in permission_groups; add or remove a group here and the role follows.
+locals {
+  permission_groups = {
+    discovery       = local.discovery_permissions
+    classic_foundry = local.classic_foundry_permissions
+    new_foundry     = local.new_foundry_permissions
+    shared_model    = local.shared_model_permissions
+  }
+
+  custom_role_permissions = {
+    actions      = distinct(flatten([for group in local.permission_groups : group.actions]))
+    data_actions = distinct(flatten([for group in local.permission_groups : group.data_actions]))
+  }
+}
 
 # --- Power Platform (Dataverse) ------------------------------------------------------
 # Power Platform sits outside the Azure Resource Manager hierarchy, so neither Lighthouse
@@ -701,7 +718,7 @@ locals {
   aiml_enabled            = var.enable_aiml_access
   ml_scanner_role_enabled = var.enable_aiml_access && var.enable_ml_scanner_custom_role
 
-  aiml_role_definition_ids = toset([for r in var.aiml_role_definition_ids : lower(trimspace(r))])
+  aiml_role_definition_ids = toset([for r in local.aiml_builtin_role_definition_ids : lower(r)])
 
   aiml_role_assignments = local.aiml_enabled ? {
     for pair in setproduct(local.target_subscription_ids, local.aiml_role_definition_ids) :
@@ -812,11 +829,11 @@ resource "azurerm_role_definition" "accuknox_ml_scanner" {
 
   name        = var.ml_scanner_role_name
   scope       = local.ml_scanner_role_scope
-  description = "AccuKnox CSPM: AML endpoint scanning plus Azure OpenAI, Assistants and AI Foundry agent access for AI/ML scanning"
+  description = "AccuKnox AIML: AI asset inventory and red teaming across Azure Machine Learning, Azure OpenAI, and classic and new Foundry models and agents"
 
   permissions {
-    actions          = var.custom_role_permissions.actions
-    data_actions     = var.custom_role_permissions.data_actions
+    actions          = local.custom_role_permissions.actions
+    data_actions     = local.custom_role_permissions.data_actions
     not_actions      = []
     not_data_actions = []
   }
