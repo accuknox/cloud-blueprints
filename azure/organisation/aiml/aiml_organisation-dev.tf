@@ -288,8 +288,6 @@ variable "role_definition_propagation_delay" {
   }
 }
 
-"Built-in role definition GUIDs granted to the AccuKnox service principal on every onboarded subscription for AI/ML scanning"
-
 locals {
   aiml_builtin_role_definition_ids = [
     "2a2b9908-6ea1-4ae2-8e65-a410df84e7d1", # Storage Blob Data Reader
