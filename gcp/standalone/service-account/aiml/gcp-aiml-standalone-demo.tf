@@ -12,7 +12,7 @@ terraform {
 variable "project_id" {
   description = "GCP Project ID"
   type        = string
-  default     = "ak-cloudwerx" # set default or pass via -var
+  default     = "GCP Project ID"
 }
 variable "service_account_id" {
   description = "Service Account ID"
@@ -25,86 +25,13 @@ variable "service_account_display_name" {
   default     = "GCP-AIML-Onboarding-SA"
 }
 
-variable "enable_apis" {
-  description = "false: only check that the required APIs (local.required_apis) are enabled. true: enable any disabled required APIs automatically"
-  type        = bool
-  default     = false
-}
-
 provider "google" {
   project = var.project_id
-}
-
-
-# ---- Required APIs ----
-# APIs AccuKnox needs on the project for onboarding and AI/ML scanning.
-locals {
-  required_apis = [
-    "compute.googleapis.com",              # Compute Engine API
-    "iam.googleapis.com",                  # Identity and Access Management (IAM) API
-    "cloudresourcemanager.googleapis.com", # Cloud Resource Manager API
-    "cloudfunctions.googleapis.com",       # Cloud Functions API
-    "cloudkms.googleapis.com",             # KMS API
-    "container.googleapis.com",            # Kubernetes Engine API
-    "sqladmin.googleapis.com",             # Cloud SQL Admin API
-    "aiplatform.googleapis.com",           # Agent Platform API - AI/ML asset discovery
-    "agentregistry.googleapis.com",        # Agent Registry API - AI agent
-    "bigquery.googleapis.com",             # BigQuery API - BigQuery data scanning
-  ]
-}
-
-# enable_apis = false: reads each API's state without enabling it.
-# The Service Usage API (serviceusage.googleapis.com) must be enabled for this check to run.
-data "google_project_service" "required" {
-  for_each = var.enable_apis ? toset([]) : toset(local.required_apis)
-  project  = var.project_id
-  service  = each.value
-}
-
-# APIs stay enabled on destroy so other workloads in the project are not affected.
-resource "google_project_service" "required" {
-  for_each = var.enable_apis ? toset(local.required_apis) : toset([])
-  project  = var.project_id
-  service  = each.value
-
-  disable_on_destroy         = false
-  disable_dependent_services = false
-}
-
-locals {
-  # A disabled API comes back with an empty or placeholder id, or an empty service
-  disabled_apis = sort([
-    for svc, s in data.google_project_service.required : svc
-    if s.id == "-" || s.id == "" || try(s.service, "") == ""
-  ])
-}
-
-# Raise any required API is not present.
-resource "terraform_data" "required_api_check" {
-  input = local.disabled_apis
-
-  lifecycle {
-    precondition {
-      condition     = length(local.disabled_apis) == 0
-      error_message = <<-EOT
-        The following required APIs are disabled on project ${var.project_id}:
-          - ${join("\n  - ", local.disabled_apis)}
-
-        Please enable them and run Terraform again:
-          gcloud services enable ${join(" ", local.disabled_apis)} --project=${var.project_id}
-
-        Or let Terraform enable them:
-          terraform apply -var="enable_apis=true"
-      EOT
-    }
-  }
 }
 
 resource "google_service_account" "service_account" {
   account_id   = var.service_account_id
   display_name = var.service_account_display_name
-
-  depends_on = [terraform_data.required_api_check, google_project_service.required]
 }
 
 # ---- Project IAM roles ----
@@ -154,8 +81,6 @@ resource "google_project_iam_custom_role" "custom_roles" {
   title       = each.value.title
   description = each.value.description
   permissions = each.value.permissions
-
-  depends_on = [terraform_data.required_api_check, google_project_service.required]
 }
 
 resource "google_project_iam_member" "custom_roles" {
@@ -170,14 +95,23 @@ resource "google_service_account_key" "sa_key" {
   service_account_id = google_service_account.service_account.name
 }
 
-resource "local_file" "sa_key_file" {
-  content  = base64decode(google_service_account_key.sa_key.private_key)
-  filename = "${path.module}/service_account_key.json"
+resource "google_secret_manager_secret" "sa_key_secret" {
+  secret_id = "accuknox-sa-key"
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_version" "sa_key_version" {
+  secret      = google_secret_manager_secret.sa_key_secret.id
+  secret_data = base64decode(google_service_account_key.sa_key.private_key)
 }
 
 output "service_account_email" {
   value = google_service_account.service_account.email
 }
-output "key_file_path" {
-  value = local_file.sa_key_file.filename
+
+output "secret_name" {
+  value       = google_secret_manager_secret.sa_key_secret.name
+  description = "Retrieve key via: gcloud secrets versions access latest --secret=accuknox-sa-key"
 }
