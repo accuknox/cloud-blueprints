@@ -288,8 +288,6 @@ variable "role_definition_propagation_delay" {
   }
 }
 
-"Built-in role definition GUIDs granted to the AccuKnox service principal on every onboarded subscription for AI/ML scanning"
-
 locals {
   aiml_builtin_role_definition_ids = [
     "2a2b9908-6ea1-4ae2-8e65-a410df84e7d1", # Storage Blob Data Reader
@@ -742,8 +740,13 @@ data "external" "ml_scanner_existing_role" {
     role_id=$(az role definition list \
       --name "$role_name" \
       --custom-role-only true \
-      --query "[0].id" -o tsv 2>/dev/null || true)
-    printf '{"id":"%s"}\n' "$role_id"
+      --query "[0].id" \
+      -o tsv 2>/dev/null || true)
+
+    # Azure CLI output may contain CR (\r).
+    role_id="$${role_id//$'\r'/}"
+
+    jq -n --arg id "$role_id" '{"id":$id}'
   EOT
   ]
 }
