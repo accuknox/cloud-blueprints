@@ -187,6 +187,8 @@ variable "register_resource_providers" {
   default     = true
 }
 
+# Built-in role definition GUIDs granted to the AccuKnox service principal on every onboarded subscription for AI/ML scanning
+
 variable "skip_inactive_subscriptions" {
   description = "Skip subscriptions whose state is Disabled, Warned or Deleted (delegations cannot be created in them). Skipped subscriptions are listed in the skipped_inactive_subscriptions output."
   type        = bool
