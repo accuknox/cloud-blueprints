@@ -47,7 +47,7 @@ Parameters:
 
   EnableScpSupport:
     Type: String
-    Default: "false"
+    Default: "true"
     AllowedValues:
       - "true"
       - "false"
@@ -104,23 +104,6 @@ Resources:
         - "arn:aws:iam::aws:policy/ReadOnlyAccess"
         - "arn:aws:iam::aws:policy/SecurityAudit"
       Policies:
-        - PolicyName: "AI-ML-permissions"
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Sid: "AllowAIMLServices"
-                Effect: Allow
-                Action:
-                  - "bedrock:InvokeModel"
-                  - "bedrock:InvokeAgent"
-                  - "bedrock:ListImportedModels"
-                  - "sagemaker:InvokeEndpoint"
-                  - "sagemaker:ListTags"
-                  - "aws-marketplace:Subscribe"
-                  - "aws-marketplace:ViewSubscriptions"
-                  - "bedrock-agentcore:InvokeAgentRuntime"
-                  - "bedrock-agentcore:StopRuntimeSession"
-                Resource: "*"
         - PolicyName: "SCP-permissions"
           PolicyDocument:
             Version: "2012-10-17"
@@ -224,30 +207,6 @@ Resources:
                   "arn:aws:iam::aws:policy/SecurityAudit"
                 ],
                 "Policies": [
-                  {
-                    "PolicyName": "AI-ML-permissions",
-                    "PolicyDocument": {
-                      "Version": "2012-10-17",
-                      "Statement": [
-                        {
-                          "Sid": "AllowAIMLServices",
-                          "Effect": "Allow",
-                          "Action": [
-                            "bedrock:InvokeModel",
-                            "bedrock:InvokeAgent",
-                            "bedrock:ListImportedModels",
-                            "sagemaker:InvokeEndpoint",
-                            "sagemaker:ListTags",
-                            "aws-marketplace:Subscribe",
-                            "aws-marketplace:ViewSubscriptions",
-                            "bedrock-agentcore:InvokeAgentRuntime",
-                            "bedrock-agentcore:StopRuntimeSession"
-                          ],
-                          "Resource": "*"
-                        }
-                      ]
-                    }
-                  },
                   {
                     "PolicyName": "SCP-permissions",
                     "PolicyDocument": {
