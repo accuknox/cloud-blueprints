@@ -125,6 +125,27 @@ def _parse_event_time_to_unix_seconds(event_time: str) -> int:
     return int(parsed.timestamp())
 
 
+def _resources_to_strings(resources) -> list[str]:
+    if not resources:
+        return []
+    if isinstance(resources, str):
+        return [resources]
+
+    values = []
+    resource_items = resources if isinstance(resources, list) else [resources]
+    for resource in resource_items:
+        if isinstance(resource, dict):
+            value = resource.get("ARN") or resource.get("arn") or resource.get("resourceName")
+            if value:
+                values.append(str(value))
+                continue
+        if isinstance(resource, str):
+            values.append(resource)
+            continue
+        values.append(json.dumps(resource, separators=(",", ":"), sort_keys=True))
+    return values
+
+
 def to_aws_alert_event(record: dict) -> dict:
     user_identity = record.get("userIdentity") or {}
     return {
@@ -140,7 +161,7 @@ def to_aws_alert_event(record: dict) -> dict:
         "errorMessage": record.get("errorMessage") or "",
         "sourceIPAddress": record.get("sourceIPAddress") or "",
         "userIdentity": user_identity,
-        "resources": record.get("resources") or [],
+        "resources": _resources_to_strings(record.get("resources")),
         "userAgent": record.get("userAgent") or "",
         "eventType": record.get("eventType") or "",
         "organizationID": os.environ.get("ORGANIZATION_ID", ""),
