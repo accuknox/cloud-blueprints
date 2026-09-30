@@ -288,6 +288,8 @@ variable "role_definition_propagation_delay" {
   }
 }
 
+# Built-in role definition GUIDs granted to the AccuKnox service principal on every onboarded subscription for AI/ML scanning
+
 locals {
   aiml_builtin_role_definition_ids = [
     "2a2b9908-6ea1-4ae2-8e65-a410df84e7d1", # Storage Blob Data Reader
@@ -380,7 +382,7 @@ locals {
 variable "enable_powerplatform_registration" {
   description = "Register the AccuKnox application as an application user in selected Dataverse environments through the BAP/Dataverse REST APIs. Requires Power Platform/Dataverse administrator permissions. Set to false to skip."
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "powerplatform_environment_selection" {
