@@ -382,7 +382,7 @@ locals {
 variable "enable_powerplatform_registration" {
   description = "Register the AccuKnox application as an application user in selected Dataverse environments through the BAP/Dataverse REST APIs. Requires Power Platform/Dataverse administrator permissions. Set to false to skip."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "powerplatform_environment_selection" {
