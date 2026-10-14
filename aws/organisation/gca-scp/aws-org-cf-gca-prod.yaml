@@ -103,7 +103,22 @@ Resources:
       ManagedPolicyArns:
         - "arn:aws:iam::aws:policy/ReadOnlyAccess"
         - "arn:aws:iam::aws:policy/SecurityAudit"
-
+      Policies:
+        - PolicyName: IdentityInventoryReadOnly
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: IdentityInventoryReadOnly
+                Effect: Allow
+                Action:
+                  - iam:GetAccountAuthorizationDetails
+                  - iam:GenerateCredentialReport
+                  - iam:GetCredentialReport
+                  - iam:ListAccessKeys
+                  - iam:GetLoginProfile
+                  - iam:ListMFADevices
+                  - cloudtrail:LookupEvents
+                Resource: '*'
   StackSet:
     Type: AWS::CloudFormation::StackSet
     Condition: CloudScanningEnabled
@@ -298,6 +313,28 @@ Resources:
                           "Resource": {
                             "Ref": "CentralEventBusArn"
                           }
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "PolicyName": "IdentityInventoryReadOnly",
+                    "PolicyDocument": {
+                      "Version": "2012-10-17",
+                      "Statement": [
+                        {
+                          "Sid": "IdentityInventoryReadOnly",
+                          "Effect": "Allow",
+                          "Action": [
+                            "iam:GetAccountAuthorizationDetails",
+                            "iam:GenerateCredentialReport",
+                            "iam:GetCredentialReport",
+                            "iam:ListAccessKeys",
+                            "iam:GetLoginProfile",
+                            "iam:ListMFADevices",
+                            "cloudtrail:LookupEvents"
+                          ],
+                          "Resource": "*"
                         }
                       ]
                     }

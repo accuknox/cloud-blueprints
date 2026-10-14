@@ -104,6 +104,21 @@ Resources:
         - "arn:aws:iam::aws:policy/ReadOnlyAccess"
         - "arn:aws:iam::aws:policy/SecurityAudit"
       Policies:
+        - PolicyName: IdentityInventoryReadOnly
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: IdentityInventoryReadOnly
+                Effect: Allow
+                Action:
+                  - iam:GetAccountAuthorizationDetails
+                  - iam:GenerateCredentialReport
+                  - iam:GetCredentialReport
+                  - iam:ListAccessKeys
+                  - iam:GetLoginProfile
+                  - iam:ListMFADevices
+                  - cloudtrail:LookupEvents
+                Resource: '*'      
         - PolicyName: "AI-ML-permissions"
           PolicyDocument:
             Version: "2012-10-17"
@@ -268,6 +283,28 @@ Resources:
                             "organizations:TagResource",
                             "organizations:UntagResource",
                             "organizations:ListTagsForResource"
+                          ],
+                          "Resource": "*"
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "PolicyName": "IdentityInventoryReadOnly",
+                    "PolicyDocument": {
+                      "Version": "2012-10-17",
+                      "Statement": [
+                        {
+                          "Sid": "IdentityInventoryReadOnly",
+                          "Effect": "Allow",
+                          "Action": [
+                            "iam:GetAccountAuthorizationDetails",
+                            "iam:GenerateCredentialReport",
+                            "iam:GetCredentialReport",
+                            "iam:ListAccessKeys",
+                            "iam:GetLoginProfile",
+                            "iam:ListMFADevices",
+                            "cloudtrail:LookupEvents"
                           ],
                           "Resource": "*"
                         }
