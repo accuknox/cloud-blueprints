@@ -123,6 +123,7 @@ Resources:
                   - "organizations:UntagResource"
                   - "organizations:ListTagsForResource"
                 Resource: "*"
+
         - PolicyName: IdentityInventoryReadOnly
           PolicyDocument:
             Version: '2012-10-17'
