@@ -15,6 +15,31 @@ resource "aws_iam_user_policy_attachment" "attach_security_audit_policy" {
   policy_arn = "arn:aws:iam::aws:policy/SecurityAudit"
 }
 
+resource "aws_iam_user_policy" "identity_inventory_readonly" {
+  name = "IdentityInventoryReadOnly"
+  user = aws_iam_user.accuknox.name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "IdentityInventoryReadOnly"
+        Effect = "Allow"
+        Action = [
+          "iam:GetAccountAuthorizationDetails",
+          "iam:GenerateCredentialReport",
+          "iam:GetCredentialReport",
+          "iam:ListAccessKeys",
+          "iam:GetLoginProfile",
+          "iam:ListMFADevices",
+          "cloudtrail:LookupEvents"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
 resource "aws_iam_access_key" "accuknox_access_key" {
   user = aws_iam_user.accuknox.name
 }

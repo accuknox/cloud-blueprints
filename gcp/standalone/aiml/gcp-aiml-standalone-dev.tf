@@ -29,6 +29,12 @@ provider "google" {
   project = var.project_id
 }
 
+resource "google_project_service" "policyanalyzer" {
+  project            = var.project_id
+  service            = "policyanalyzer.googleapis.com"
+  disable_on_destroy = false
+}
+
 resource "google_service_account" "service_account" {
   account_id   = var.service_account_id
   display_name = var.service_account_display_name
@@ -46,6 +52,18 @@ locals {
     "roles/storage.bucketViewer",     # Cloud Storage bucket metadata
     "roles/storage.objectViewer",     # Cloud Storage object data
   ]
+}
+
+resource "google_project_iam_member" "policy_analyzer_viewer" {
+  project = var.project_id
+  role    = "roles/policyanalyzer.activityAnalysisViewer"
+  member  = "serviceAccount:${google_service_account.service_account.email}"
+}
+
+resource "google_project_iam_member" "logging_viewer" {
+  project = var.project_id
+  role    = "roles/logging.viewer"
+  member  = "serviceAccount:${google_service_account.service_account.email}"
 }
 
 resource "google_project_iam_member" "project_roles" {

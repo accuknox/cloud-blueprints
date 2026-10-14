@@ -288,6 +288,8 @@ variable "role_definition_propagation_delay" {
   }
 }
 
+# Built-in role definition GUIDs granted to the AccuKnox service principal on every onboarded subscription for AI/ML scanning
+
 locals {
   aiml_builtin_role_definition_ids = [
     "2a2b9908-6ea1-4ae2-8e65-a410df84e7d1", # Storage Blob Data Reader
@@ -440,11 +442,12 @@ variable "powerplatform_api_version" {
   default     = "2021-04-01"
 }
 
+data "azurerm_client_config" "current" {}
 
 locals {
   context_subscription_id = lower(trimspace(var.context_subscription_id))
 
-  root_management_group_id = trimspace(var.management_group_id) == "" ? "" : element(reverse(split("/", trimspace(var.management_group_id))), 0)
+  root_management_group_id = trimspace(var.management_group_id) == "" ? data.azurerm_client_config.current.tenant_id : element(reverse(split("/", trimspace(var.management_group_id))), 0)
 
   included_management_group_ids = toset([
     for m in var.included_management_group_ids : element(reverse(split("/", trimspace(m))), 0) if trimspace(m) != ""
