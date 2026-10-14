@@ -18,7 +18,12 @@ provider "google" {
   project = var.project_id
 }
 
-# Step 1: Create Custom Role
+resource "google_project_service" "policyanalyzer" {
+  project            = var.project_id
+  service            = "policyanalyzer.googleapis.com"
+  disable_on_destroy = false
+}
+
 resource "google_project_iam_custom_role" "custom_role" {
   project     = var.project_id
   role_id     = "custom_storage_get_iam_policy_role"
@@ -27,32 +32,45 @@ resource "google_project_iam_custom_role" "custom_role" {
   permissions = ["storage.buckets.getIamPolicy"]
 }
 
-# Step 2: Create Service Account
 resource "google_service_account" "service_account" {
   account_id   = var.service_account_id
   display_name = var.service_account_display_name
 }
 
-# Step 3: Assign Viewer role to the service account
 resource "google_project_iam_member" "viewer_role" {
   project = var.project_id
   role    = "roles/viewer"
   member  = "serviceAccount:${google_service_account.service_account.email}"
 }
 
-# Step 4: Assign custom role to the service account
+resource "google_project_iam_member" "security_reviewer" {
+  project = var.project_id
+  role    = "roles/iam.securityReviewer"
+  member  = "serviceAccount:${google_service_account.service_account.email}"
+}
+
 resource "google_project_iam_member" "custom_role_assignment" {
   project = var.project_id
   role    = google_project_iam_custom_role.custom_role.name
   member  = "serviceAccount:${google_service_account.service_account.email}"
 }
 
-# Step 5: Generate JSON key for service account and store in Secret Manager
+resource "google_project_iam_member" "policy_analyzer_viewer" {
+  project = var.project_id
+  role    = "roles/policyanalyzer.activityAnalysisViewer"
+  member  = "serviceAccount:${google_service_account.service_account.email}"
+}
+
+resource "google_project_iam_member" "logging_viewer" {
+  project = var.project_id
+  role    = "roles/logging.viewer"
+  member  = "serviceAccount:${google_service_account.service_account.email}"
+}
+
 resource "google_service_account_key" "sa_key" {
   service_account_id = google_service_account.service_account.name
 }
 
-# Step 6: Save Key to Secret Manager
 resource "google_secret_manager_secret" "sa_key_secret" {
   secret_id = "accuknox-sa-key"
   replication {

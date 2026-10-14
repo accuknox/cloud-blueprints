@@ -48,6 +48,24 @@ locals {
   ]
 }
 
+resource "google_project_service" "policyanalyzer" {
+  project            = var.project_id
+  service            = "policyanalyzer.googleapis.com"
+  disable_on_destroy = false
+}
+
+resource "google_project_iam_member" "policy_analyzer_viewer" {
+  project = var.project_id
+  role    = "roles/policyanalyzer.activityAnalysisViewer"
+  member  = "serviceAccount:${google_service_account.service_account.email}"
+}
+
+resource "google_project_iam_member" "logging_viewer" {
+  project = var.project_id
+  role    = "roles/logging.viewer"
+  member  = "serviceAccount:${google_service_account.service_account.email}"
+}
+
 resource "google_project_iam_member" "project_roles" {
   for_each = toset(local.project_roles)
   project  = var.project_id
