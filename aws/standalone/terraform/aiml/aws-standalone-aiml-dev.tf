@@ -36,6 +36,23 @@ resource "aws_iam_user_policy" "ai_ml_permissions" {
           "bedrock-agentcore:InvokeAgentRuntime",
           "bedrock-agentcore:StopRuntimeSession"
         ]
+
+        Resource = "*"
+      },
+      {
+        Sid    = "IdentityInventoryReadOnly"
+        Effect = "Allow"
+
+        Action = [
+          "iam:GetAccountAuthorizationDetails",
+          "iam:GenerateCredentialReport",
+          "iam:GetCredentialReport",
+          "iam:ListAccessKeys",
+          "iam:GetLoginProfile",
+          "iam:ListMFADevices",
+          "cloudtrail:LookupEvents"
+        ]
+
         Resource = "*"
       }
     ]
@@ -47,10 +64,12 @@ resource "aws_iam_access_key" "accuknox_access_key" {
 }
 
 resource "local_file" "credentials_file" {
-  filename = "credentials.txt"
-  content  = <<EOT
+  filename = "${path.module}/credentials.txt"
+  content = <<-EOT
 [default]
 aws_access_key_id     = ${aws_iam_access_key.accuknox_access_key.id}
 aws_secret_access_key = ${aws_iam_access_key.accuknox_access_key.secret}
 EOT
+
+  file_permission = "0600"
 }
