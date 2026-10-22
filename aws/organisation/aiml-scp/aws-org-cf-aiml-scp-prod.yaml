@@ -136,6 +136,25 @@ Resources:
                   - iam:ListMFADevices
                   - cloudtrail:LookupEvents
                 Resource: '*'
+        - PolicyName: "SCP-permissions"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: "ManageServiceControlPolicies"
+                Effect: Allow
+                Action:
+                  - "organizations:CreatePolicy"
+                  - "organizations:UpdatePolicy"
+                  - "organizations:DeletePolicy"
+                  - "organizations:DescribePolicy"
+                  - "organizations:ListPolicies"
+                  - "organizations:ListTargetsForPolicy"
+                  - "organizations:AttachPolicy"
+                  - "organizations:DetachPolicy"
+                  - "organizations:TagResource"
+                  - "organizations:UntagResource"
+                  - "organizations:ListTagsForResource"
+                Resource: "*"
                 
   StackSet:
     Type: AWS::CloudFormation::StackSet
@@ -260,6 +279,32 @@ Resources:
                             "iam:GetLoginProfile",
                             "iam:ListMFADevices",
                             "cloudtrail:LookupEvents"
+                          ],
+                          "Resource": "*"
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "PolicyName": "SCP-permissions",
+                    "PolicyDocument": {
+                      "Version": "2012-10-17",
+                      "Statement": [
+                        {
+                          "Sid": "ManageServiceControlPolicies",
+                          "Effect": "Allow",
+                          "Action": [
+                            "organizations:CreatePolicy",
+                            "organizations:UpdatePolicy",
+                            "organizations:DeletePolicy",
+                            "organizations:DescribePolicy",
+                            "organizations:ListPolicies",
+                            "organizations:ListTargetsForPolicy",
+                            "organizations:AttachPolicy",
+                            "organizations:DetachPolicy",
+                            "organizations:TagResource",
+                            "organizations:UntagResource",
+                            "organizations:ListTagsForResource"
                           ],
                           "Resource": "*"
                         }
