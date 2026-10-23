@@ -1,0 +1,46 @@
+# ==============================================================================
+# AccuKnox GCP Organization Onboarding
+#   organization_id               numeric org ID (IAM & Admin > Settings)
+#   billing_project_id            project used for billing/quota on the
+#                                 asset-inventory API calls
+#   auditor_service_account_email service account AccuKnox gave you
+# ==============================================================================
+
+
+# ---- A) Onboard the whole organization  (recommended) -------------------------
+# New projects and folders are onboarded automatically, no re-apply needed.
+
+organization_id               = "955809990560"
+billing_project_id            = "my-onboarding-project"
+auditor_service_account_email = "accuknox-organisation-scanner@accuknox-gcp.iam.gserviceaccount.com"
+
+scope        = "organization"
+mode         = "all"
+auto_onboard = true
+
+
+# ---- B) Onboard only selected folders / projects ------------------------------
+# Folder IDs are numeric, projects use the project ID.
+
+organization_id               = "955809990560"
+billing_project_id            = "my-onboarding-project"
+auditor_service_account_email = "accuknox-organisation-scanner@accuknox-gcp.iam.gserviceaccount.com"
+
+scope            = "organization"
+mode             = "include"
+include_folders  = ["123456789012"]
+include_projects = ["my-project-a"]
+auto_onboard     = true
+
+
+# ---- C) Onboard everything except selected folders / projects -----------------
+
+organization_id               = "955809990560"
+billing_project_id            = "my-onboarding-project"
+auditor_service_account_email = "accuknox-organisation-scanner@accuknox-gcp.iam.gserviceaccount.com"
+
+scope            = "organization"
+mode             = "exclude"
+exclude_folders  = ["345678901234"]
+exclude_projects = ["sensitive-project-id"]
+auto_onboard     = true
