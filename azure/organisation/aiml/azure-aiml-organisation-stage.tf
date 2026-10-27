@@ -239,9 +239,9 @@ variable "accuknox_app_client_id" {
 # Entra ID app role assignments (application permissions, admin-consented). Lighthouse
 # delegates Azure resources only, so directory-level reads have to be granted here.
 variable "enable_graph_permissions" {
-  description = "Grant the AccuKnox service principal Microsoft Graph application permissions. Requires Privileged Role Administrator or Global Administrator"
+  description = "Grant the AccuKnox service principal Microsoft Graph application permissions. Requires Privileged Role Administrator or Global Administrator. Set to false to skip and grant admin consent manually in the portal."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "graph_app_role_ids" {
@@ -249,6 +249,9 @@ variable "graph_app_role_ids" {
   type        = list(string)
   default = [
     "20e6f8e4-ffac-4cf7-82f7-70ddb7564318", # AuditLogsQuery-CRM.Read.All
+    "7ab1d382-f21e-4acd-a863-ba3e13f7da61", # Directory.Read.All (CIEM)
+    "b0afded3-3588-46d8-8b3d-9842eff778da", # AuditLog.Read.All (CIEM)
+    "230c1aed-a721-4c5d-9cb4-a90514e508ef", # Reports.Read.All (CIEM)
   ]
 
   validation {
