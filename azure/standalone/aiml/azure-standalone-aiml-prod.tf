@@ -39,7 +39,6 @@ data "azuread_service_principal" "msgraph" {
   client_id = "00000003-0000-0000-c000-000000000000" # Microsoft Graph
 }
 
-# Microsoft Graph application permissions used for CIEM (identity inventory).
 locals {
   graph_app_roles = {
     "Directory.Read.All" = data.azuread_service_principal.msgraph.app_role_ids["Directory.Read.All"]

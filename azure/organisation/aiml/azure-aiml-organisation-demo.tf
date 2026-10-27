@@ -249,9 +249,9 @@ variable "graph_app_role_ids" {
   type        = list(string)
   default = [
     "20e6f8e4-ffac-4cf7-82f7-70ddb7564318", # AuditLogsQuery-CRM.Read.All
-    "7ab1d382-f21e-4acd-a863-ba3e13f7da61", # Directory.Read.All (CIEM)
-    "b0afded3-3588-46d8-8b3d-9842eff778da", # AuditLog.Read.All (CIEM)
-    "230c1aed-a721-4c5d-9cb4-a90514e508ef", # Reports.Read.All (CIEM)
+    "7ab1d382-f21e-4acd-a863-ba3e13f7da61", # Directory.Read.All
+    "b0afded3-3588-46d8-8b3d-9842eff778da", # AuditLog.Read.All
+    "230c1aed-a721-4c5d-9cb4-a90514e508ef", # Reports.Read.All
   ]
 
   validation {
