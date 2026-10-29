@@ -8,6 +8,11 @@ variable "subscription_id" {
   default     = ""
   description = "Azure Subscription ID. Leave empty to use current subscription"
 }
+variable "enable_graph_permissions" {
+  type        = bool
+  default     = true
+  description = "Grant admin consent for the Microsoft Graph application permissions via app role assignments. Requires the operator to be a Global Administrator or Privileged Role Administrator in the tenant. Set to false to only declare the permissions on the app registration and grant admin consent manually in the portal."
+}
 
 terraform {
   required_providers {
@@ -30,10 +35,15 @@ terraform {
 
 
 
-# Microsoft Graph delegated permissions declared on the app registration.
+data "azuread_service_principal" "msgraph" {
+  client_id = "00000003-0000-0000-c000-000000000000" # Microsoft Graph
+}
+
 locals {
-  graph_delegated_scopes = {
-    "Directory.Read.All" = "5778995a-e1bf-45b8-affa-663a9f3f4d04"
+  graph_app_roles = {
+    "Directory.Read.All" = data.azuread_service_principal.msgraph.app_role_ids["Directory.Read.All"]
+    "AuditLog.Read.All"  = data.azuread_service_principal.msgraph.app_role_ids["AuditLog.Read.All"]
+    "Reports.Read.All"   = data.azuread_service_principal.msgraph.app_role_ids["Reports.Read.All"]
   }
 }
 
@@ -115,13 +125,13 @@ provider "azuread" {}
 resource "azuread_application" "accuknox" {
   display_name = var.app_display_name
   required_resource_access {
-    resource_app_id = "00000003-0000-0000-c000-000000000000" # Microsoft Graph
+    resource_app_id = data.azuread_service_principal.msgraph.client_id # Microsoft Graph
 
     dynamic "resource_access" {
-      for_each = local.graph_delegated_scopes
+      for_each = local.graph_app_roles
       content {
         id   = resource_access.value
-        type = "Scope"
+        type = "Role"
       }
     }
   }
@@ -139,6 +149,13 @@ resource "random_password" "password" {
 
 resource "azuread_service_principal_password" "client_secret" {
   service_principal_id = azuread_service_principal.accuknox_sp.id
+}
+
+resource "azuread_app_role_assignment" "graph" {
+  for_each            = { for name, id in local.graph_app_roles : name => id if var.enable_graph_permissions }
+  app_role_id         = each.value
+  principal_object_id = azuread_service_principal.accuknox_sp.object_id
+  resource_object_id  = data.azuread_service_principal.msgraph.object_id
 }
 
 data "azurerm_subscription" "current" {

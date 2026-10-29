@@ -37,6 +37,20 @@ resource "aws_iam_user_policy" "ai_ml_permissions" {
           "bedrock-agentcore:StopRuntimeSession"
         ]
         Resource = "*"
+      },
+      {
+        Sid    = "IdentityInventoryReadOnly"
+        Effect = "Allow"
+        Action = [
+          "iam:GetAccountAuthorizationDetails",
+          "iam:GenerateCredentialReport",
+          "iam:GetCredentialReport",
+          "iam:ListAccessKeys",
+          "iam:GetLoginProfile",
+          "iam:ListMFADevices",
+          "cloudtrail:LookupEvents"
+        ]
+        Resource = "*"
       }
     ]
   })
