@@ -1,0 +1,92 @@
+name: Validate IaC
+
+# Validates all Terraform modules and CloudFormation templates on every
+# pull request targeting the dev branch.
+
+on:
+  pull_request:
+    branches:
+      - dev
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-iac-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  terraform-validate:
+    name: Terraform Validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      # Formatting drift is reported but does not fail the build, since
+      # several pre-existing files are not fmt-clean yet.
+      - name: Terraform fmt check (non-blocking)
+        run: |
+          if ! terraform fmt -check -recursive -diff; then
+            echo "::warning::Some Terraform files are not formatted. Run 'terraform fmt -recursive' to fix."
+          fi
+
+      - name: Terraform init & validate (all modules)
+        run: |
+          set -uo pipefail
+          export TF_PLUGIN_CACHE_DIR="$RUNNER_TEMP/tf-plugin-cache"
+          mkdir -p "$TF_PLUGIN_CACHE_DIR"
+
+          mapfile -t modules < <(find . -type f -name '*.tf' ! -path '*/.terraform/*' -exec dirname {} \; | sort -u)
+          echo "Found ${#modules[@]} Terraform module directories."
+
+          failed=()
+          for dir in "${modules[@]}"; do
+            echo "::group::Validate ${dir}"
+            if (cd "$dir" \
+                && terraform init -backend=false -input=false -no-color > /dev/null \
+                && terraform validate -no-color); then
+              echo "PASS: ${dir}"
+            else
+              echo "FAIL: ${dir}"
+              failed+=("$dir")
+            fi
+            echo "::endgroup::"
+          done
+
+          if [ "${#failed[@]}" -gt 0 ]; then
+            echo "::error::Terraform validation failed for: ${failed[*]}"
+            exit 1
+          fi
+          echo "All ${#modules[@]} Terraform modules validated successfully."
+
+  cloudformation-lint:
+    name: CloudFormation Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install cfn-lint
+        run: pip install cfn-lint
+
+      # All YAML under aws/ is CloudFormation (org + standalone templates,
+      # SCP support stack, SAM template). Warnings are reported but only
+      # errors fail the build (--non-zero-exit-code error).
+      - name: Run cfn-lint
+        run: |
+          set -uo pipefail
+          mapfile -t templates < <(find aws -type f \( -name '*.yaml' -o -name '*.yml' \) | sort)
+          echo "Found ${#templates[@]} CloudFormation templates."
+          cfn-lint --non-zero-exit-code error "${templates[@]}"
+          echo "All ${#templates[@]} CloudFormation templates passed lint (error level)."
