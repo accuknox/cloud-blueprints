@@ -77,6 +77,8 @@ locals {
     && !anytrue([for e in local.exclude_folders : contains(lookup(local.folder_ancestors, f, []), e)])
   ]
 
+  deny_mode = var.exclusion_enforcement == "deny" && var.auto_onboard
+
   include_degraded_folders = local.deny_mode ? [] : (
     !var.auto_onboard ? local.include_folders_deduped : [
       for f in local.include_folders_deduped : f
