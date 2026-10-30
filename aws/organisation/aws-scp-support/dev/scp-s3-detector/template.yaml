@@ -1,0 +1,242 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Opt-in SCP alert PoC that reads organization CloudTrail log files from S3
+  through SQS. It is dry-run by default and does not replace the EventBridge path.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: aws-scp-s3-poc
+
+  ResourceNameSuffix:
+    Type: String
+    Default: test
+    AllowedPattern: "[A-Za-z0-9-]+"
+    MaxLength: 16
+
+  CloudTrailBucketName:
+    Type: String
+    Description: Existing organization CloudTrail S3 bucket containing AWSLogs/ objects.
+
+  CloudTrailObjectPrefix:
+    Type: String
+    Default: AWSLogs/
+    Description: Prefix containing CloudTrail log files in the existing bucket.
+
+  CloudTrailSnsTopicArn:
+    Type: String
+    Default: ""
+    Description: >
+      Optional existing CloudTrail log-delivery SNS topic ARN. Leave empty for
+      historical replay-only testing.
+
+  LambdaCodeS3Bucket:
+    Type: String
+    Description: S3 bucket containing the PoC Lambda zip.
+
+  LambdaCodeS3Key:
+    Type: String
+    Default: aws-scp-support/scp-s3-poc-lambda.zip
+
+  LambdaCodeS3ObjectVersion:
+    Type: String
+    Default: ""
+
+  DryRun:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: When true, detect and measure matches without calling the webhook.
+
+  WebhookUrl:
+    Type: String
+    Default: https://cwpp.dev.accuknox.com/aws/alerts
+
+  TenantId:
+    Type: String
+    Default: ""
+
+  AlertsTopic:
+    Type: String
+    Default: awsalerts
+
+  ComponentName:
+    Type: String
+    Default: cloud-governance
+
+  OrganizationId:
+    Type: String
+    Default: ""
+
+  BatchSize:
+    Type: Number
+    Default: 10
+    MinValue: 1
+    MaxValue: 100
+
+  MaximumBatchingWindowSeconds:
+    Type: Number
+    Default: 20
+    MinValue: 0
+    MaxValue: 300
+
+  DedupRetentionDays:
+    Type: Number
+    Default: 7
+    MinValue: 1
+    MaxValue: 30
+
+Conditions:
+  HasCloudTrailSnsTopic: !Not [!Equals [!Ref CloudTrailSnsTopicArn, ""]]
+  HasLambdaCodeObjectVersion: !Not [!Equals [!Ref LambdaCodeS3ObjectVersion, ""]]
+
+Resources:
+  DeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub ${ProjectName}-${ResourceNameSuffix}-dlq
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+
+  ProcessingQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub ${ProjectName}-${ResourceNameSuffix}-queue
+      MessageRetentionPeriod: 345600
+      VisibilityTimeout: 360
+      SqsManagedSseEnabled: true
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt DeadLetterQueue.Arn
+        maxReceiveCount: 5
+
+  CloudTrailTopicQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Condition: HasCloudTrailSnsTopic
+    Properties:
+      Queues:
+        - !Ref ProcessingQueue
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowCloudTrailTopic
+            Effect: Allow
+            Principal:
+              Service: sns.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt ProcessingQueue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !Ref CloudTrailSnsTopicArn
+
+  CloudTrailTopicSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasCloudTrailSnsTopic
+    Properties:
+      TopicArn: !Ref CloudTrailSnsTopicArn
+      Protocol: sqs
+      Endpoint: !GetAtt ProcessingQueue.Arn
+      RawMessageDelivery: true
+
+  DeduplicationTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub ${ProjectName}-${ResourceNameSuffix}-dedup
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: event_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: event_id
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: false
+      SSESpecification:
+        SSEEnabled: true
+
+  ProcessorRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaSQSQueueExecutionRole
+      Policies:
+        - PolicyName: ReadCloudTrailAndDeduplicate
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ReadCloudTrailObjects
+                Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub arn:${AWS::Partition}:s3:::${CloudTrailBucketName}/${CloudTrailObjectPrefix}*
+              - Sid: DeduplicateAlerts
+                Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                Resource: !GetAtt DeduplicationTable.Arn
+
+  ProcessorFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub ${ProjectName}-${ResourceNameSuffix}-processor
+      Runtime: python3.12
+      Handler: lambda_function.lambda_handler
+      Role: !GetAtt ProcessorRole.Arn
+      Code:
+        S3Bucket: !Ref LambdaCodeS3Bucket
+        S3Key: !Ref LambdaCodeS3Key
+        S3ObjectVersion: !If
+          - HasLambdaCodeObjectVersion
+          - !Ref LambdaCodeS3ObjectVersion
+          - !Ref AWS::NoValue
+      MemorySize: 512
+      Timeout: 60
+      Environment:
+        Variables:
+          DRY_RUN: !Ref DryRun
+          WEBHOOK_URL: !Ref WebhookUrl
+          TENANT_ID: !Ref TenantId
+          TOPIC: !Ref AlertsTopic
+          COMPONENT_NAME: !Ref ComponentName
+          ORGANIZATION_ID: !Ref OrganizationId
+          DEDUP_TABLE_NAME: !Ref DeduplicationTable
+          DEDUP_RETENTION_DAYS: !Ref DedupRetentionDays
+
+  QueueEventSource:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      EventSourceArn: !GetAtt ProcessingQueue.Arn
+      FunctionName: !Ref ProcessorFunction
+      Enabled: true
+      BatchSize: !Ref BatchSize
+      MaximumBatchingWindowInSeconds: !Ref MaximumBatchingWindowSeconds
+      FunctionResponseTypes:
+        - ReportBatchItemFailures
+
+Outputs:
+  ProcessingQueueUrl:
+    Description: Queue URL used by the historical replay script.
+    Value: !Ref ProcessingQueue
+
+  ProcessingQueueArn:
+    Value: !GetAtt ProcessingQueue.Arn
+
+  DeadLetterQueueUrl:
+    Value: !Ref DeadLetterQueue
+
+  ProcessorFunctionName:
+    Value: !Ref ProcessorFunction
+
+  DeduplicationTableName:
+    Value: !Ref DeduplicationTable

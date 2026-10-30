@@ -1,0 +1,7 @@
+organization_id               = "123456789012"
+auditor_service_account_email = "auditor@vendor-prj.iam.gserviceaccount.com"
+
+billing_project_id  = "customer-host-project"
+provider_project_id = "customer-host-project"
+
+mode = "all"

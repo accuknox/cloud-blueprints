@@ -1,0 +1,639 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  AWS SCP support stack: enforcement API plus centralized organization
+  CloudTrail S3/SNS/SQS processing for SCP denial alerts.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: aws-scp-support
+    Description: Prefix used for AWS resource names.
+
+  ResourceNameSuffix:
+    Type: String
+    Default: test
+    AllowedPattern: "[A-Za-z0-9-]+"
+    MaxLength: 16
+    Description: Short suffix appended to SCP resource names for uniqueness.
+
+  ApiStageName:
+    Type: String
+    Default: test
+    Description: HTTP API stage name.
+
+  EnableJwtAuthorizer:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: Set false only for local/sandbox testing without JWT.
+
+  EnforcementLambdaS3Bucket:
+    Type: String
+    Default: cloud-security-cnapp
+    Description: S3 bucket containing enforcement-lambda.zip.
+
+  EnforcementLambdaS3Key:
+    Type: String
+    Default: aws/organisation/aws-scp-support/dev-1d53230/enforcement-lambda.zip
+    Description: S3 key for enforcement-lambda.zip.
+
+  EnforcementLambdaS3ObjectVersion:
+    Type: String
+    Default: ""
+    Description: Optional S3 object version for enforcement-lambda.zip.
+
+  AuthorizerLambdaS3Bucket:
+    Type: String
+    Default: cloud-security-cnapp
+    Description: S3 bucket containing authorizer-lambda.zip.
+
+  AuthorizerLambdaS3Key:
+    Type: String
+    Default: aws/organisation/aws-scp-support/dev-1d53230/authorizer-lambda.zip
+    Description: S3 key for authorizer-lambda.zip.
+
+  AuthorizerLambdaS3ObjectVersion:
+    Type: String
+    Default: ""
+    Description: Optional S3 object version for authorizer-lambda.zip.
+
+  ScpDetectorLambdaS3Bucket:
+    Type: String
+    Default: cloud-security-cnapp
+    Description: S3 bucket containing the CloudTrail S3 detector Lambda package.
+
+  ScpDetectorLambdaS3Key:
+    Type: String
+    Default: aws/organisation/aws-scp-support/dev-1d53230/scp-s3-detector-lambda.zip
+    Description: S3 key for scp-s3-detector-lambda.zip.
+
+  ScpDetectorLambdaS3ObjectVersion:
+    Type: String
+    Default: ""
+    Description: Optional S3 object version for scp-s3-detector-lambda.zip.
+
+  ScpAlertsWebhookUrl:
+    Type: String
+    Default: "https://cwpp.dev.accuknox.com/aws/alerts"
+    Description: SaaS webhook URL that receives normalized SCP alert candidates.
+
+  ScpAlertsTenantId:
+    Type: String
+    Default: ""
+    Description: Tenant id included in SCP alert payloads.
+
+  ScpAlertsTopic:
+    Type: String
+    Default: awsalerts
+    Description: SaaS topic name included in SCP alert payloads.
+
+  ScpComponentName:
+    Type: String
+    Default: cloud-governance
+    Description: SAAS component name included in SCP alert payloads.
+
+  ScpAlertAllowedPrincipalOrgId:
+    Type: String
+    Default: ""
+    Description: AWS Organization ID recorded in normalized SCP alerts.
+
+  CreateScpAlertCloudTrail:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: Create the organization CloudTrail and centralized SCP alert processing pipeline.
+
+  ScpAlertCloudTrailLogRetentionDays:
+    Type: Number
+    Default: 1
+    MinValue: 1
+    Description: Number of days to retain SCP alert CloudTrail logs in S3.
+
+  ScpAlertDryRun:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: Detect and measure SCP denials without calling the platform webhook.
+
+  ScpAlertBatchSize:
+    Type: Number
+    Default: 10
+    MinValue: 1
+    MaxValue: 100
+
+  ScpAlertMaximumBatchingWindowSeconds:
+    Type: Number
+    Default: 20
+    MinValue: 0
+    MaxValue: 300
+
+  ScpAlertDedupRetentionDays:
+    Type: Number
+    Default: 7
+    MinValue: 1
+    MaxValue: 30
+
+  ScpDetectorLambdaMemorySize:
+    Type: Number
+    Default: 512
+
+  ScpDetectorLambdaTimeout:
+    Type: Number
+    Default: 60
+    MinValue: 1
+    MaxValue: 60
+
+  LambdaRuntime:
+    Type: String
+    Default: python3.12
+    AllowedValues: [python3.12]
+
+  EnforcementLambdaMemorySize:
+    Type: Number
+    Default: 256
+
+  EnforcementLambdaTimeout:
+    Type: Number
+    Default: 30
+
+  AuthorizerLambdaMemorySize:
+    Type: Number
+    Default: 256
+
+  AuthorizerLambdaTimeout:
+    Type: Number
+    Default: 10
+
+  JwtJwksUrl:
+    Type: String
+    Default: https://cspm.dev.accuknox.com/api/v1/jwks/
+    Description: CSPM JWKS URL.
+
+  JwtExpectedIssuer:
+    Type: String
+    Default: cspm.dev.accuknox.com
+
+  JwtExpectedAudience:
+    Type: String
+    Default: aws::lambda::scp-policy-enforcement
+    Description: Expected aud claim for SCP enforcement API requests.
+
+  JwtExpectedSubject:
+    Type: String
+    Default: policy-provider-service
+    Description: Expected sub claim for SCP enforcement API requests.
+
+  JwtRequiredTokenType:
+    Type: String
+    Default: access
+
+  JwtRequiredClaims:
+    Type: String
+    Default: exp,tenant-id
+    Description: Comma-separated required JWT claims.
+
+  JwtClockSkewSeconds:
+    Type: Number
+    Default: 60
+
+Conditions:
+  UseJwtAuthorizer: !Equals [!Ref EnableJwtAuthorizer, "true"]
+  HasJwtExpectedSubject: !Not [!Equals [!Ref JwtExpectedSubject, ""]]
+  HasEnforcementLambdaObjectVersion: !Not [!Equals [!Ref EnforcementLambdaS3ObjectVersion, ""]]
+  HasAuthorizerLambdaObjectVersion: !Not [!Equals [!Ref AuthorizerLambdaS3ObjectVersion, ""]]
+  HasScpDetectorLambdaObjectVersion: !Not [!Equals [!Ref ScpDetectorLambdaS3ObjectVersion, ""]]
+  CreateScpAlertCloudTrailCondition: !Equals [!Ref CreateScpAlertCloudTrail, "true"]
+
+Resources:
+  EnforcementLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ProjectName}-${ResourceNameSuffix}-enforcement-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: !Sub OrganizationsScpEnforcement-${ResourceNameSuffix}
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - organizations:CreatePolicy
+                  - organizations:UpdatePolicy
+                  - organizations:DeletePolicy
+                  - organizations:AttachPolicy
+                  - organizations:DetachPolicy
+                  - organizations:TagResource
+                  - organizations:ListPolicies
+                  - organizations:ListTargetsForPolicy
+                  - organizations:ListTagsForResource
+                Resource: "*"
+
+  EnforcementLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub ${ProjectName}-${ResourceNameSuffix}-enforcement
+      Runtime: !Ref LambdaRuntime
+      Handler: lambda_function.lambda_handler
+      Role: !GetAtt EnforcementLambdaRole.Arn
+      Code:
+        S3Bucket: !Ref EnforcementLambdaS3Bucket
+        S3Key: !Ref EnforcementLambdaS3Key
+        S3ObjectVersion: !If [HasEnforcementLambdaObjectVersion, !Ref EnforcementLambdaS3ObjectVersion, !Ref AWS::NoValue]
+      MemorySize: !Ref EnforcementLambdaMemorySize
+      Timeout: !Ref EnforcementLambdaTimeout
+
+  AuthorizerLambdaRole:
+    Type: AWS::IAM::Role
+    Condition: UseJwtAuthorizer
+    Properties:
+      RoleName: !Sub ${ProjectName}-${ResourceNameSuffix}-authorizer-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  AuthorizerLambda:
+    Type: AWS::Lambda::Function
+    Condition: UseJwtAuthorizer
+    Properties:
+      FunctionName: !Sub ${ProjectName}-${ResourceNameSuffix}-jwt-authorizer
+      Runtime: !Ref LambdaRuntime
+      Handler: lambda_function.lambda_handler
+      Role: !GetAtt AuthorizerLambdaRole.Arn
+      Code:
+        S3Bucket: !Ref AuthorizerLambdaS3Bucket
+        S3Key: !Ref AuthorizerLambdaS3Key
+        S3ObjectVersion: !If [HasAuthorizerLambdaObjectVersion, !Ref AuthorizerLambdaS3ObjectVersion, !Ref AWS::NoValue]
+      MemorySize: !Ref AuthorizerLambdaMemorySize
+      Timeout: !Ref AuthorizerLambdaTimeout
+      Environment:
+        Variables:
+          JWT_JWKS_URL: !Ref JwtJwksUrl
+          JWT_EXPECTED_ISSUER: !Ref JwtExpectedIssuer
+          JWT_EXPECTED_AUDIENCE: !Ref JwtExpectedAudience
+          JWT_EXPECTED_SUBJECT: !If [HasJwtExpectedSubject, !Ref JwtExpectedSubject, ""]
+          JWT_REQUIRED_TOKEN_TYPE: !Ref JwtRequiredTokenType
+          JWT_REQUIRED_CLAIMS: !Ref JwtRequiredClaims
+          JWT_CLOCK_SKEW_SECONDS: !Ref JwtClockSkewSeconds
+
+  ScpAlertCloudTrailBucket:
+    Type: AWS::S3::Bucket
+    Condition: CreateScpAlertCloudTrailCondition
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireScpAlertCloudTrailLogs
+            Status: Enabled
+            ExpirationInDays: !Ref ScpAlertCloudTrailLogRetentionDays
+
+  ScpAlertCloudTrailBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Condition: CreateScpAlertCloudTrailCondition
+    Properties:
+      Bucket: !Ref ScpAlertCloudTrailBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AWSCloudTrailAclCheck
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: s3:GetBucketAcl
+            Resource: !GetAtt ScpAlertCloudTrailBucket.Arn
+            Condition:
+              StringEquals:
+                aws:SourceArn: !Sub arn:aws:cloudtrail:${AWS::Region}:${AWS::AccountId}:trail/${ProjectName}-${ResourceNameSuffix}-scp-alert-trail
+          - Sid: AWSCloudTrailWrite
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: s3:PutObject
+            Resource: !Sub ${ScpAlertCloudTrailBucket.Arn}/AWSLogs/*
+            Condition:
+              StringEquals:
+                aws:SourceArn: !Sub arn:aws:cloudtrail:${AWS::Region}:${AWS::AccountId}:trail/${ProjectName}-${ResourceNameSuffix}-scp-alert-trail
+                s3:x-amz-acl: bucket-owner-full-control
+
+  ScpAlertNotificationTopic:
+    Type: AWS::SNS::Topic
+    Condition: CreateScpAlertCloudTrailCondition
+    Properties:
+      TopicName: !Sub ${ProjectName}-${ResourceNameSuffix}-scp-log-delivery
+
+  ScpAlertNotificationTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Condition: CreateScpAlertCloudTrailCondition
+    Properties:
+      Topics:
+        - !Ref ScpAlertNotificationTopic
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowCloudTrailPublish
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: sns:Publish
+            Resource: !Ref ScpAlertNotificationTopic
+            Condition:
+              StringEquals:
+                aws:SourceArn: !Sub arn:aws:cloudtrail:${AWS::Region}:${AWS::AccountId}:trail/${ProjectName}-${ResourceNameSuffix}-scp-alert-trail
+
+  ScpAlertDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Condition: CreateScpAlertCloudTrailCondition
+    Properties:
+      QueueName: !Sub ${ProjectName}-${ResourceNameSuffix}-scp-alert-dlq
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+
+  ScpAlertProcessingQueue:
+    Type: AWS::SQS::Queue
+    Condition: CreateScpAlertCloudTrailCondition
+    Properties:
+      QueueName: !Sub ${ProjectName}-${ResourceNameSuffix}-scp-alert-queue
+      MessageRetentionPeriod: 345600
+      VisibilityTimeout: 360
+      SqsManagedSseEnabled: true
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt ScpAlertDeadLetterQueue.Arn
+        maxReceiveCount: 5
+
+  ScpAlertProcessingQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Condition: CreateScpAlertCloudTrailCondition
+    Properties:
+      Queues:
+        - !Ref ScpAlertProcessingQueue
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowCloudTrailNotificationTopic
+            Effect: Allow
+            Principal:
+              Service: sns.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt ScpAlertProcessingQueue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !Ref ScpAlertNotificationTopic
+
+  ScpAlertNotificationSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: CreateScpAlertCloudTrailCondition
+    DependsOn: ScpAlertProcessingQueuePolicy
+    Properties:
+      TopicArn: !Ref ScpAlertNotificationTopic
+      Protocol: sqs
+      Endpoint: !GetAtt ScpAlertProcessingQueue.Arn
+      RawMessageDelivery: true
+
+  ScpAlertDeduplicationTable:
+    Type: AWS::DynamoDB::Table
+    Condition: CreateScpAlertCloudTrailCondition
+    Properties:
+      TableName: !Sub ${ProjectName}-${ResourceNameSuffix}-scp-alert-dedup
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: event_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: event_id
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: false
+      SSESpecification:
+        SSEEnabled: true
+
+  ScpAlertCloudTrail:
+    Type: AWS::CloudTrail::Trail
+    Condition: CreateScpAlertCloudTrailCondition
+    DependsOn:
+      - ScpAlertCloudTrailBucketPolicy
+      - ScpAlertNotificationTopicPolicy
+    Properties:
+      TrailName: !Sub ${ProjectName}-${ResourceNameSuffix}-scp-alert-trail
+      S3BucketName: !Ref ScpAlertCloudTrailBucket
+      SnsTopicName: !Ref ScpAlertNotificationTopic
+      EnableLogFileValidation: false
+      IncludeGlobalServiceEvents: true
+      IsLogging: true
+      IsMultiRegionTrail: true
+      IsOrganizationTrail: true
+      EventSelectors:
+        - IncludeManagementEvents: true
+          ReadWriteType: All
+
+  ScpDetectorLambdaRole:
+    Type: AWS::IAM::Role
+    Condition: CreateScpAlertCloudTrailCondition
+    Properties:
+      RoleName: !Sub ${ProjectName}-${ResourceNameSuffix}-scp-detector-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaSQSQueueExecutionRole
+      Policies:
+        - PolicyName: !Sub ReadCloudTrailAndDeduplicate-${ResourceNameSuffix}
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ReadCloudTrailObjects
+                Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub ${ScpAlertCloudTrailBucket.Arn}/AWSLogs/*
+              - Sid: DeduplicateAlerts
+                Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                Resource: !GetAtt ScpAlertDeduplicationTable.Arn
+
+  ScpDetectorLambda:
+    Type: AWS::Lambda::Function
+    Condition: CreateScpAlertCloudTrailCondition
+    Properties:
+      FunctionName: !Sub ${ProjectName}-${ResourceNameSuffix}-scp-detector
+      Runtime: !Ref LambdaRuntime
+      Handler: lambda_function.lambda_handler
+      Role: !GetAtt ScpDetectorLambdaRole.Arn
+      Code:
+        S3Bucket: !Ref ScpDetectorLambdaS3Bucket
+        S3Key: !Ref ScpDetectorLambdaS3Key
+        S3ObjectVersion: !If [HasScpDetectorLambdaObjectVersion, !Ref ScpDetectorLambdaS3ObjectVersion, !Ref AWS::NoValue]
+      MemorySize: !Ref ScpDetectorLambdaMemorySize
+      Timeout: !Ref ScpDetectorLambdaTimeout
+      Environment:
+        Variables:
+          WEBHOOK_URL: !Ref ScpAlertsWebhookUrl
+          TENANT_ID: !Ref ScpAlertsTenantId
+          TOPIC: !Ref ScpAlertsTopic
+          ORGANIZATION_ID: !Ref ScpAlertAllowedPrincipalOrgId
+          COMPONENT_NAME: !Ref ScpComponentName
+          DRY_RUN: !Ref ScpAlertDryRun
+          DEDUP_TABLE_NAME: !Ref ScpAlertDeduplicationTable
+          DEDUP_RETENTION_DAYS: !Ref ScpAlertDedupRetentionDays
+
+  ScpAlertQueueEventSource:
+    Type: AWS::Lambda::EventSourceMapping
+    Condition: CreateScpAlertCloudTrailCondition
+    Properties:
+      EventSourceArn: !GetAtt ScpAlertProcessingQueue.Arn
+      FunctionName: !Ref ScpDetectorLambda
+      Enabled: true
+      BatchSize: !Ref ScpAlertBatchSize
+      MaximumBatchingWindowInSeconds: !Ref ScpAlertMaximumBatchingWindowSeconds
+      FunctionResponseTypes:
+        - ReportBatchItemFailures
+
+  HttpApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub ${ProjectName}-${ResourceNameSuffix}-api
+      ProtocolType: HTTP
+
+  EnforcementIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref HttpApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt EnforcementLambda.Arn
+      PayloadFormatVersion: "2.0"
+      TimeoutInMillis: 30000
+
+  JwtLambdaAuthorizer:
+    Type: AWS::ApiGatewayV2::Authorizer
+    Condition: UseJwtAuthorizer
+    Properties:
+      ApiId: !Ref HttpApi
+      Name: !Sub cspm-jwt-lambda-authorizer-${ResourceNameSuffix}
+      AuthorizerType: REQUEST
+      AuthorizerUri: !Sub
+        - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AuthorizerArn}/invocations
+        - AuthorizerArn: !GetAtt AuthorizerLambda.Arn
+      IdentitySource:
+        - $request.header.Authorization
+      AuthorizerPayloadFormatVersion: "2.0"
+      EnableSimpleResponses: true
+      AuthorizerResultTtlInSeconds: 0
+
+  EnforcementRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: POST /enforce-policy
+      Target: !Sub integrations/${EnforcementIntegration}
+      AuthorizationType: !If [UseJwtAuthorizer, CUSTOM, NONE]
+      AuthorizerId: !If [UseJwtAuthorizer, !Ref JwtLambdaAuthorizer, !Ref AWS::NoValue]
+
+  CheckRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: GET /check
+      Target: !Sub integrations/${EnforcementIntegration}
+      AuthorizationType: NONE
+
+  ApiStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref HttpApi
+      StageName: !Ref ApiStageName
+      AutoDeploy: true
+
+  EnforcementInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref EnforcementLambda
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*/*/enforce-policy
+
+  CheckInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref EnforcementLambda
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*/*/check
+
+  AuthorizerInvokePermission:
+    Type: AWS::Lambda::Permission
+    Condition: UseJwtAuthorizer
+    Properties:
+      FunctionName: !Ref AuthorizerLambda
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/authorizers/*
+
+Outputs:
+  InvokeUrl:
+    Description: Full enforce-policy URL.
+    Value: !Sub ${HttpApi.ApiEndpoint}/${ApiStageName}
+
+  EnforcePolicyUrl:
+    Description: Full enforce-policy URL.
+    Value: !Sub ${HttpApi.ApiEndpoint}/${ApiStageName}/enforce-policy
+
+  CheckUrl:
+    Description: Full check URL.
+    Value: !Sub ${HttpApi.ApiEndpoint}/${ApiStageName}/check
+
+  ScpDetectorLambdaArn:
+    Condition: CreateScpAlertCloudTrailCondition
+    Description: SCP detector Lambda ARN.
+    Value: !GetAtt ScpDetectorLambda.Arn
+
+  ScpAlertCloudTrailArn:
+    Condition: CreateScpAlertCloudTrailCondition
+    Description: Organization CloudTrail ARN used to emit SCP alert candidate events.
+    Value: !GetAtt ScpAlertCloudTrail.Arn
+
+  ScpAlertCloudTrailBucketName:
+    Condition: CreateScpAlertCloudTrailCondition
+    Description: S3 bucket storing SCP alert CloudTrail logs.
+    Value: !Ref ScpAlertCloudTrailBucket
+
+  ScpAlertProcessingQueueUrl:
+    Condition: CreateScpAlertCloudTrailCondition
+    Description: SQS queue receiving CloudTrail log-delivery notifications.
+    Value: !Ref ScpAlertProcessingQueue
+
+  ScpAlertDeadLetterQueueUrl:
+    Condition: CreateScpAlertCloudTrailCondition
+    Description: Dead-letter queue for failed CloudTrail log processing.
+    Value: !Ref ScpAlertDeadLetterQueue
