@@ -1,0 +1,30 @@
+on:
+  pull_request:
+    branches:
+      - development
+    types: [ opened, edited, reopened, synchronize]
+
+name: Ensure PR titles follow the format "[CNAPP-<ISSUE_NUMBER>] <ISSUE_TITLE>"
+
+jobs:
+  tests:
+    name: Enforce PR Title Convention
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check PR title
+        uses: actions/github-script@v7
+        with:
+          token: ${{ secrets.GH_ORG_TOKEN }}
+          script: |
+            // Get the PR title
+            const payload = context.payload
+            const prTitle = payload.pull_request.title
+            // The pattern for JIRA ticket format
+            // Example: "[CNAPP-1234]: This is the title"
+            // Example: "[MK-1234]: This is the title"
+            // Example: "[DGFD-1234]: This is the titile"
+            const jiraPattern =  /^\[(CNAPP|MK|DGFD|AI|MIN)\-\d+\]:\s.+/g
+            if (!jiraPattern.test(prTitle)) {
+              // Fails the workflow
+              core.setFailed("PR title does not match JIRA ticket format! We expect it to start like so '[CNAPP-1234]: This is the title'")
+            }
