@@ -1,7 +1,7 @@
 on:
   pull_request:
     branches:
-      - development
+      - dev
     types: [ opened, edited, reopened, synchronize]
 
 name: Ensure PR titles follow the format "[CNAPP-<ISSUE_NUMBER>] <ISSUE_TITLE>"
