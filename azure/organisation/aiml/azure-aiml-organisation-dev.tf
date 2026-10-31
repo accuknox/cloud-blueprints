@@ -1080,10 +1080,10 @@ resource "terraform_data" "pp_app_user" {
     quiet       = true
 
     environment = {
-      PP_URL  = self.input.url
-      PP_APP  = self.input.app_id
-      PP_ROLE = self.input.role_name
-      PP_ENV  = self.input.env_name
+      PP_URL     = self.input.url
+      PP_APP     = self.input.app_id
+      PP_ROLE    = self.input.role_name
+      PP_ENV     = self.input.env_name
       PP_TIMEOUT = tostring(try(self.input.timeout_seconds, 30))
     }
 
