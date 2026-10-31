@@ -49,9 +49,10 @@ data "azuread_service_principal" "msgraph" {
 
 locals {
   graph_app_roles = {
-    "Directory.Read.All" = data.azuread_service_principal.msgraph.app_role_ids["Directory.Read.All"]
-    "AuditLog.Read.All" = data.azuread_service_principal.msgraph.app_role_ids["AuditLog.Read.All"]
-    "Reports.Read.All" = data.azuread_service_principal.msgraph.app_role_ids["Reports.Read.All"]
+    "Directory.Read.All"   = data.azuread_service_principal.msgraph.app_role_ids["Directory.Read.All"]
+    "GroupMember.Read.All" = data.azuread_service_principal.msgraph.app_role_ids["GroupMember.Read.All"]
+    "AuditLog.Read.All"    = data.azuread_service_principal.msgraph.app_role_ids["AuditLog.Read.All"]
+    "Reports.Read.All"     = data.azuread_service_principal.msgraph.app_role_ids["Reports.Read.All"]
   }
 }
 

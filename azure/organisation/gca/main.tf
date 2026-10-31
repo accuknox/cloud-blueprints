@@ -30,7 +30,7 @@ locals {
 
 data "external" "included_mg_subs" {
   for_each = var.mode == "include" ? toset(var.included_management_group_ids) : []
-  program  = ["bash", "-c", <<-EOT
+  program = ["bash", "-c", <<-EOT
     az graph query -q "ResourceContainers | where type == 'microsoft.resources/subscriptions' | extend mgChain = properties.managementGroupAncestorsChain | where mgChain has '${each.value}' | project subscriptionId" -o json | jq -c '{subscriptions: ([.data[].subscriptionId] | @json)}'
   EOT
   ]
@@ -93,10 +93,10 @@ resource "azurerm_lighthouse_definition" "shared_lighthouse_definition" {
   dynamic "authorization" {
     for_each = var.authorizations
     content {
-      principal_id                     = authorization.value.principal_id
-      principal_display_name           = authorization.value.principal_display_name
-      role_definition_id               = authorization.value.role_definition_id
-      delegated_role_definition_ids    = try(authorization.value.delegated_role_definition_ids, null)
+      principal_id                  = authorization.value.principal_id
+      principal_display_name        = authorization.value.principal_display_name
+      role_definition_id            = authorization.value.role_definition_id
+      delegated_role_definition_ids = try(authorization.value.delegated_role_definition_ids, null)
     }
   }
 }
@@ -142,7 +142,7 @@ resource "azurerm_policy_definition" "auto_lighthouse_assignment" {
 
   policy_rule = jsonencode({
     if = {
-      field = "type"
+      field  = "type"
       equals = "Microsoft.Resources/subscriptions"
     }
     then = {
@@ -156,11 +156,11 @@ resource "azurerm_policy_definition" "auto_lighthouse_assignment" {
         existenceCondition = {
           allOf = [
             {
-              field = "type"
+              field  = "type"
               equals = "Microsoft.ManagedServices/registrationAssignments"
             },
             {
-              field = "Microsoft.ManagedServices/registrationAssignments/registrationDefinitionId"
+              field  = "Microsoft.ManagedServices/registrationAssignments/registrationDefinitionId"
               equals = "[parameters('lighthouseDefinitionId')]"
             }
           ]

@@ -18,7 +18,7 @@ output "target_subscription_ids" {
   value = var.mode == "include" ? concat(
     var.include_extra_subscription_ids,
     local.include_mode_subscription_ids
-  ) : concat(
+    ) : concat(
     local.exclude_mode_subscription_ids,
     var.include_exception_subscription_ids
   )

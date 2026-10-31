@@ -42,13 +42,13 @@ resource "google_service_account" "service_account" {
 
 locals {
   project_roles = [
-    "roles/viewer",                   # Read-only access to project resources
-    "roles/iam.securityReviewer",     # Read IAM policies across the project
-    "roles/aiplatform.viewer",        # Vertex AI / Agent Platform asset discovery
-    "roles/agentregistry.viewer",     # Agent Registry read access
-    "roles/bigquery.dataViewer",      # BigQuery data scanning
-    "roles/storage.bucketViewer",     # Cloud Storage bucket metadata
-    "roles/storage.objectViewer",     # Cloud Storage object data
+    "roles/viewer",               # Read-only access to project resources
+    "roles/iam.securityReviewer", # Read IAM policies across the project
+    "roles/aiplatform.viewer",    # Vertex AI / Agent Platform asset discovery
+    "roles/agentregistry.viewer", # Agent Registry read access
+    "roles/bigquery.dataViewer",  # BigQuery data scanning
+    "roles/storage.bucketViewer", # Cloud Storage bucket metadata
+    "roles/storage.objectViewer", # Cloud Storage object data
   ]
 }
 
