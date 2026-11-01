@@ -1,61 +1,3 @@
-#######################################################################################
-# AccuKnox - Azure organisation onboarding via Azure Lighthouse (v2)
-#######################################################################################
-#
-# WHAT THIS DOES
-#   1. Discovers the subscriptions to onboard from your management-group hierarchy
-#      (see "SUBSCRIPTION SELECTION" below).
-#   2. Checks that the Microsoft.ManagedServices and Microsoft.PolicyInsights resource
-#      providers are registered in every selected subscription and registers only the
-#      missing ones (Azure CLI; already-registered providers are skipped).
-#   3. Creates ONE shared Lighthouse registration definition in context_subscription_id.
-#   4. Creates a Lighthouse assignment (delegation) in every selected subscription.
-#   5. Deploys a deployIfNotExists Azure Policy at the management group(s) so that
-#      subscriptions created or moved there in the future are delegated automatically,
-#      and starts a remediation task for it.
-#
-# SUBSCRIPTION SELECTION (variable "mode")
-#   "all"      every subscription under management_group_id (recursive)
-#   "include"  every subscription under included_management_group_ids (recursive)
-#              + include_extra_subscription_ids
-#   "exclude"  every subscription under management_group_id (recursive)
-#              - everything under excluded_management_groups (recursive)
-#              + include_exception_subscription_ids
-#   excluded_subscription_ids is applied LAST in every mode and always wins.
-#   Disabled / Warned / Deleted subscriptions are skipped (skip_inactive_subscriptions).
-#
-# HOW TO RUN
-#   1. Fill in the "USER INPUT" variables below (or pass them via terraform.tfvars).
-#   2. az login              (same identity Terraform uses; Owner on the management
-#                             group(s) / subscriptions in scope)
-#   3. terraform init && terraform plan && terraform apply
-#
-# REQUIREMENTS
-#   Terraform >= 1.5, azurerm provider 4.x, Azure CLI logged in with the same identity
-#   ("az provider show" runs at plan time; "az provider register" for missing providers
-#   and the policy remediation task run at apply time).
-#
-# PERMISSIONS (deploying identity)
-#   * Owner on every subscription in scope (a Lighthouse delegation needs
-#     Microsoft.Authorization/roleAssignments/write).
-#   * On the management group(s): Owner, or User Access Administrator plus Resource
-#     Policy Contributor (policy definition and assignment, the Owner role for the
-#     policy identity, and Microsoft.PolicyInsights/remediations/write for the
-#     remediation task). "Elevate access" for a Global Administrator only grants User
-#     Access Administrator, which is NOT enough for the remediation task.
-#
-# RE-RUNNING / MIGRATING FROM THE v1 SCRIPT
-#   Terraform never overwrites resources it does not manage. If "terraform apply" fails
-#   with "a resource with the ID ... already exists ... needs to be imported", a previous
-#   deployment left a policy definition or assignment with the same name behind. Either
-#   destroy that deployment first ("terraform destroy" in its directory), delete the
-#   leftovers, or adopt them with "terraform import".
-#######################################################################################
-
-#######################################################################################
-# Terraform & providers
-#######################################################################################
-
 terraform {
   required_version = ">= 1.5.0"
 
@@ -76,10 +18,6 @@ provider "azurerm" {
   subscription_id                 = trimspace(var.context_subscription_id)
   resource_provider_registrations = "none"
 }
-
-#######################################################################################
-# Variables - managed by AccuKnox (do not modify)
-#######################################################################################
 
 variable "managing_tenant_id" {
   description = "AccuKnox tenant ID (managing tenant of the Lighthouse delegation)."
@@ -132,10 +70,6 @@ variable "offer_description" {
   default     = "Delegated read-only access via Lighthouse"
 }
 
-#######################################################################################
-# Variables - USER INPUT
-#######################################################################################
-
 variable "context_subscription_id" {
   description = "Subscription ID (GUID) in which the shared Lighthouse definition is created. Any subscription of the tenant works; it is also used as the Terraform provider context."
   type        = string
@@ -158,7 +92,6 @@ variable "management_group_id" {
   }
 }
 
-# Onboarding mode - see "SUBSCRIPTION SELECTION" at the top of this file.
 variable "mode" {
   description = "Subscription selection mode: \"all\" (everything under management_group_id), \"include\" (only included_management_group_ids + include_extra_subscription_ids) or \"exclude\" (everything under management_group_id except excluded_management_groups, plus include_exception_subscription_ids)."
   type        = string
@@ -170,7 +103,6 @@ variable "mode" {
   }
 }
 
-# --- Global exclusions (applied in every mode, always win) ---------------------------
 variable "excluded_subscription_ids" {
   description = "Subscription IDs that must never be onboarded. Applied in every mode after all other rules, so a subscription listed here is skipped even if it is under an included management group or listed in include_extra_subscription_ids / include_exception_subscription_ids. Also excluded from the auto-onboarding policy."
   type        = list(string)
@@ -182,7 +114,6 @@ variable "excluded_subscription_ids" {
   }
 }
 
-# --- Include mode (mode = "include") -------------------------------------------------
 variable "included_management_group_ids" {
   description = "INCLUDE mode: management groups to onboard. Every subscription under them (recursively) is onboarded and the auto-onboarding policy is assigned to each of them."
   type        = list(string)
@@ -205,7 +136,6 @@ variable "include_extra_subscription_ids" {
   }
 }
 
-# --- Exclude mode (mode = "exclude") -------------------------------------------------
 variable "excluded_management_groups" {
   description = "EXCLUDE mode: management groups (descendants of management_group_id) whose subscriptions are NOT onboarded (recursively). They are also excluded from the auto-onboarding policy."
   type        = list(string)
@@ -227,10 +157,6 @@ variable "include_exception_subscription_ids" {
     error_message = "include_exception_subscription_ids entries must be subscription IDs (GUIDs)."
   }
 }
-
-#######################################################################################
-# Variables - behaviour (defaults are fine for most customers)
-#######################################################################################
 
 variable "enable_auto_policy" {
   description = "Create the deployIfNotExists policy (definition, assignment, Owner role for its identity, remediation task) that delegates subscriptions created or moved under the management group(s) in the future. Set to false to onboard only the subscriptions that exist today."
@@ -279,13 +205,6 @@ variable "deployment_location" {
   default     = "eastus"
 }
 
-#######################################################################################
-# Locals - normalised inputs
-#   * whitespace trimmed, empty entries dropped
-#   * full resource IDs accepted ("/subscriptions/<guid>", ".../managementGroups/<name>")
-#   * subscription IDs lower-cased (Azure returns lower-case GUIDs)
-#######################################################################################
-
 locals {
   context_subscription_id = lower(trimspace(var.context_subscription_id))
 
@@ -314,10 +233,6 @@ locals {
   uses_root_management_group = contains(["all", "exclude"], var.mode)
 }
 
-#######################################################################################
-# Input validation (mode / variable consistency) - fails "terraform plan" early
-#######################################################################################
-
 resource "terraform_data" "input_validation" {
   lifecycle {
     precondition {
@@ -341,10 +256,6 @@ resource "terraform_data" "input_validation" {
     }
   }
 }
-
-#######################################################################################
-# Discovery - management group hierarchy and subscription states
-#######################################################################################
 
 data "azurerm_management_group" "root" {
   count = local.uses_root_management_group ? 1 : 0
@@ -381,9 +292,6 @@ data "azurerm_subscriptions" "visible" {
   count = var.skip_inactive_subscriptions ? 1 : 0
 }
 
-#######################################################################################
-# Locals - subscription selection
-#######################################################################################
 
 locals {
   root_descendant_management_group_ids = [
@@ -403,17 +311,14 @@ locals {
     for mg in data.azurerm_management_group.excluded : try([for s in mg.all_subscription_ids : lower(s)], [])
   ]))
 
-  # Mode rules
   candidate_subscription_ids = (
     var.mode == "all" ? local.root_subscription_ids :
     var.mode == "include" ? setunion(local.included_mg_subscription_ids, local.include_extra_subscription_ids) :
     setunion(setsubtract(local.root_subscription_ids, local.excluded_mg_subscription_ids), local.include_exception_subscription_ids)
   )
 
-  # Global exclusions always win
   selected_subscription_ids = setsubtract(local.candidate_subscription_ids, local.excluded_subscription_ids)
 
-  # Drop subscriptions in which a delegation cannot be created
   inactive_subscription_states = ["Disabled", "Warned", "Deleted"]
 
   subscription_states = {
@@ -425,16 +330,12 @@ locals {
     if contains(local.inactive_subscription_states, lookup(local.subscription_states, id, "Enabled"))
   }
 
-  # Final list of subscriptions that receive a Lighthouse assignment
   target_subscription_ids = setsubtract(local.selected_subscription_ids, keys(local.skipped_inactive_subscriptions))
 
-  # Management groups that receive the auto-onboarding policy
   policy_scope_management_group_ids = !var.enable_auto_policy ? toset([]) : (
     var.mode == "include" ? local.included_management_group_ids : toset([local.root_management_group_id])
   )
 
-  # Scopes the policy must never touch: excluded management groups (exclude mode) and
-  # globally excluded subscriptions (every mode).
   policy_not_scopes = concat(
     var.mode == "exclude" ? [for m in sort(tolist(local.excluded_management_group_ids)) : "/providers/Microsoft.Management/managementGroups/${m}"] : [],
     [for s in sort(tolist(local.excluded_subscription_ids)) : "/subscriptions/${s}"],
@@ -446,15 +347,6 @@ locals {
 
   resource_provider_subscription_ids = var.register_resource_providers ? setunion(local.target_subscription_ids, [local.context_subscription_id]) : toset([])
 }
-
-#######################################################################################
-# Resource provider registration
-#   Microsoft.ManagedServices (Lighthouse) and Microsoft.PolicyInsights (policy
-#   compliance) must be registered in every onboarded subscription. Every
-#   subscription/provider pair is checked at plan time with "az provider show":
-#   pairs that are already "Registered" are skipped, the others are registered at
-#   apply time with "az provider register --wait".
-#######################################################################################
 
 locals {
   resource_provider_checks = {
@@ -491,8 +383,6 @@ locals {
 resource "terraform_data" "resource_provider_registration" {
   for_each = local.resource_provider_actions
 
-  # The decision is recorded when a pair is first seen (visible in the plan as
-  # input.action = "register" | "skip"); later state changes do not create diffs.
   input = each.value
 
   lifecycle {
@@ -507,10 +397,6 @@ resource "terraform_data" "resource_provider_registration" {
     )
   }
 }
-
-#######################################################################################
-# Shared Lighthouse registration definition (one per tenant, in the context subscription)
-#######################################################################################
 
 resource "azurerm_lighthouse_definition" "this" {
   name               = "${var.offer_name} - ${var.accuknox_verification_token}"
@@ -531,10 +417,6 @@ resource "azurerm_lighthouse_definition" "this" {
   depends_on = [terraform_data.resource_provider_registration]
 }
 
-#######################################################################################
-# Lighthouse assignments - one per selected subscription
-#######################################################################################
-
 resource "azurerm_lighthouse_assignment" "this" {
   for_each = local.target_subscription_ids
 
@@ -543,10 +425,6 @@ resource "azurerm_lighthouse_assignment" "this" {
 
   depends_on = [terraform_data.resource_provider_registration]
 }
-
-#######################################################################################
-# Auto-onboarding policy - deployIfNotExists at every policy scope management group
-#######################################################################################
 
 resource "azurerm_policy_definition" "auto_onboard" {
   for_each = local.policy_scope_management_group_ids
@@ -655,8 +533,6 @@ resource "azurerm_management_group_policy_assignment" "auto_onboard" {
   })
 }
 
-# Creating a Lighthouse delegation requires Microsoft.Authorization/roleAssignments/write,
-# so the policy's managed identity needs Owner at the management group.
 resource "azurerm_role_assignment" "auto_onboard_owner" {
   for_each = local.policy_scope_management_group_ids
 
@@ -667,17 +543,6 @@ resource "azurerm_role_assignment" "auto_onboard_owner" {
   description        = "AccuKnox Lighthouse auto-onboarding policy identity"
 }
 
-# Remediation task for the auto-onboarding policy, created through the Azure CLI each
-# time the policy assignment is (re)created. At management-group scope Azure only
-# remediates resources that have already been evaluated as non-compliant
-# ("ExistingNonCompliant"; "ReEvaluateCompliance" is rejected above subscription
-# scope), so the task created right after the assignment usually has nothing to do:
-# Terraform has already delegated every existing subscription above. It is a backstop
-# that can be re-run after Azure Policy's next evaluation cycle with
-#   terraform apply -replace='terraform_data.auto_onboard_remediation["<mg>"]'
-# It only starts after the direct assignments exist, so the two never race for the
-# same subscription. Requires Microsoft.PolicyInsights/remediations/write at the
-# management group (Owner or Resource Policy Contributor).
 resource "terraform_data" "auto_onboard_remediation" {
   for_each = local.policy_scope_management_group_ids
 
@@ -692,10 +557,6 @@ resource "terraform_data" "auto_onboard_remediation" {
     azurerm_lighthouse_assignment.this,
   ]
 }
-
-#######################################################################################
-# Outputs
-#######################################################################################
 
 output "mode" {
   description = "Subscription selection mode in effect."
