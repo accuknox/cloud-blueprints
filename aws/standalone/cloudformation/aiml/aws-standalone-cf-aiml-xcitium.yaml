@@ -62,8 +62,6 @@ Resources:
                   - "bedrock:ListImportedModels"
                   - "sagemaker:InvokeEndpoint"
                   - "sagemaker:ListTags"
-                  - "aws-marketplace:Subscribe"
-                  - "aws-marketplace:ViewSubscriptions"
                   - "bedrock-agentcore:InvokeAgentRuntime"
                   - "bedrock-agentcore:StopRuntimeSession"
                 Resource: "*"
