@@ -31,8 +31,6 @@ resource "aws_iam_user_policy" "ai_ml_permissions" {
           "bedrock:ListImportedModels",
           "sagemaker:InvokeEndpoint",
           "sagemaker:ListTags",
-          "aws-marketplace:Subscribe",
-          "aws-marketplace:ViewSubscriptions",
           "bedrock-agentcore:InvokeAgentRuntime",
           "bedrock-agentcore:StopRuntimeSession"
         ]
