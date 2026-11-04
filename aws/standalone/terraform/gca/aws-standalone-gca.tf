@@ -32,7 +32,8 @@ resource "aws_iam_user_policy" "identity_inventory_readonly" {
           "iam:ListAccessKeys",
           "iam:GetLoginProfile",
           "iam:ListMFADevices",
-          "cloudtrail:LookupEvents"
+          "cloudtrail:LookupEvents",
+          "config:GetComplianceDetailsByConfigRule"
         ]
         Resource = "*"
       }

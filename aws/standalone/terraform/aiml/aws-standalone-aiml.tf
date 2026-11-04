@@ -46,7 +46,8 @@ resource "aws_iam_user_policy" "ai_ml_permissions" {
           "iam:ListAccessKeys",
           "iam:GetLoginProfile",
           "iam:ListMFADevices",
-          "cloudtrail:LookupEvents"
+          "cloudtrail:LookupEvents",
+          "config:GetComplianceDetailsByConfigRule"
         ]
         Resource = "*"
       }
