@@ -93,6 +93,7 @@ Resources:
                   - iam:GetLoginProfile
                   - iam:ListMFADevices
                   - cloudtrail:LookupEvents
+                  - config:GetComplianceDetailsByConfigRule
                 Resource: '*'
                 
   StackSet:
@@ -203,7 +204,8 @@ Resources:
                             "iam:ListAccessKeys",
                             "iam:GetLoginProfile",
                             "iam:ListMFADevices",
-                            "cloudtrail:LookupEvents"
+                            "cloudtrail:LookupEvents",
+                            "config:GetComplianceDetailsByConfigRule"
                           ],
                           "Resource": "*"
                         }

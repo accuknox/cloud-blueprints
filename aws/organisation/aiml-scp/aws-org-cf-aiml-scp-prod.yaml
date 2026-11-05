@@ -110,6 +110,7 @@ Resources:
                   - iam:GetLoginProfile
                   - iam:ListMFADevices
                   - cloudtrail:LookupEvents
+                  - config:GetComplianceDetailsByConfigRule
                 Resource: '*'
         - PolicyName: "AI-ML-permissions"
           PolicyDocument:
@@ -292,7 +293,8 @@ Resources:
                             "iam:ListAccessKeys",
                             "iam:GetLoginProfile",
                             "iam:ListMFADevices",
-                            "cloudtrail:LookupEvents"
+                            "cloudtrail:LookupEvents",
+                            "config:GetComplianceDetailsByConfigRule"
                           ],
                           "Resource": "*"
                         }
